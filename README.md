@@ -55,23 +55,35 @@ First launch creates a default config at `~/.ai-usage/config.json`. All settings
 
 History is stored at `~/.ai-usage/history/` and is not committed to git.
 
-### Second Claude subscription
+### Two Claude accounts
+
+**Recommended: Secure profile mode**
+
+Each account gets its own isolated Keychain entry. After setup the `claude` CLI is no longer needed for those sources.
+
+1. Make sure Claude Code CLI is logged in with your **first** account.
+2. Settings → Claude 1 → Connection: **Secure profile** → "Import Current Claude Account" → Save & Refresh.
+3. In your terminal, switch Claude Code to the second account:
+   ```bash
+   claude auth logout
+   claude auth login   # log in with the second account
+   ```
+4. Settings → Claude 2 → Connection: **Secure profile** → "Import Current Claude Account" → Save & Refresh.
+5. Switch Claude Code back to whichever account you use interactively:
+   ```bash
+   claude auth logout
+   claude auth login
+   ```
+
+AI Usage never writes to Claude Code's own Keychain item or `~/.claude.json`.
+
+**Alternative: CLI mode with separate config directories**
 
 ```bash
 CLAUDE_CONFIG_DIR=~/.claude-account-2 claude auth login
 ```
 
-Enable Claude 2 in Settings and set `CLAUDE_CONFIG_DIR` to `~/.claude-account-2`.
-
-### Secure profile mode
-
-Import the current Claude Code login into an isolated Keychain item without touching Claude Code's own credentials:
-
-1. Log in with Claude Code using the first account.
-2. Settings → Claude 1 → Connection: "Secure profile" → "Import Current Claude Account" → Save.
-3. Switch Claude Code to the second account and repeat for Claude 2.
-
-AI Usage never writes to Claude Code's Keychain item or `~/.claude.json`.
+Enable Claude 2 in Settings, set Connection to **Claude CLI**, and set `CLAUDE_CONFIG_DIR` to `~/.claude-account-2`. Both accounts run via the CLI in parallel; no Keychain import needed.
 
 ## Privacy
 

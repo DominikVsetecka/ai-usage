@@ -264,10 +264,9 @@ private struct ProviderSettingsSection: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
-                    if source.iconData != nil || source.iconName != nil {
+                    if source.iconData != nil {
                         Button {
                             source.iconData = nil
-                            source.iconName = nil
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                         }
@@ -532,13 +531,7 @@ private struct ProviderSettingsSection: View {
     }
 
     private var iconDisplayName: String {
-        if source.iconData != nil { return "Custom icon" }
-        switch source.iconName {
-        case "claude": return "Claude (built-in)"
-        case "openai": return "OpenAI (built-in)"
-        case let name? where !name.isEmpty: return name
-        default: return "None"
-        }
+        source.iconData != nil ? "Custom icon" : "None"
     }
 
 }
