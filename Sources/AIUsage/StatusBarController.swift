@@ -96,7 +96,7 @@ final class StatusBarController {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             if let popoverWindow = popover.contentViewController?.view.window {
                 var f = popoverWindow.frame
-                f.origin.y -= 16
+                f.origin.y -= 42
                 popoverWindow.setFrameOrigin(f.origin)
             }
             NSApp.activate(ignoringOtherApps: true)
