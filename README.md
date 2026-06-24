@@ -29,7 +29,7 @@ Build a release binary:
 
 ```bash
 swift build -c release
-# .build/release/AIUsage
+# binary is at .build/release/AIUsage
 ```
 
 Print current values without starting the menu bar app:
@@ -37,6 +37,36 @@ Print current values without starting the menu bar app:
 ```bash
 swift run AIUsageSnapshot
 ```
+
+### Running the binary on another machine
+
+The compiled `AIUsage` binary is a plain command-line executable — there is no `.app` bundle, so double-clicking won't work directly. Options:
+
+**Drag into Terminal** — drag `.build/release/AIUsage` from Finder into a Terminal window and press Return.
+
+**Run from the shell:**
+```bash
+/path/to/AIUsage
+```
+
+**Keep it in your PATH:**
+```bash
+cp .build/release/AIUsage /usr/local/bin/ai-usage
+ai-usage        # run from anywhere
+```
+
+**Launch on login with a shell script** — create `~/ai-usage.sh`:
+```bash
+#!/bin/bash
+/usr/local/bin/ai-usage
+```
+Then make it executable and add it to System Settings → General → Login Items:
+```bash
+chmod +x ~/ai-usage.sh
+```
+macOS Gatekeeper may block the binary on first run. If you see a security warning, open System Settings → Privacy & Security, scroll down and click **Allow Anyway**.
+
+> **Note:** `.command` files must be marked executable (`chmod +x`) before double-clicking works. macOS will still show a Gatekeeper prompt on first open for unsigned binaries.
 
 ## Features
 
