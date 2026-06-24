@@ -98,7 +98,7 @@ final class StatusBarController {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             if let popoverWindow = popover.contentViewController?.view.window {
                 var f = popoverWindow.frame
-                f.origin.y -= 100
+                f.origin.y -= 64
                 popoverWindow.setFrameOrigin(f.origin)
                 popoverWindow.appearance = NSAppearance(named: .darkAqua)
             }
