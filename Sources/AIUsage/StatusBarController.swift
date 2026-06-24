@@ -79,7 +79,9 @@ final class StatusBarController {
         let pop = NSPopover()
         pop.behavior = .transient
         pop.animates = true
-        pop.contentViewController = NSHostingController(rootView: UsagePopoverView(viewModel: vm))
+        let hostingController = NSHostingController(rootView: UsagePopoverView(viewModel: vm))
+        hostingController.view.appearance = NSAppearance(named: .darkAqua)
+        pop.contentViewController = hostingController
 
         self.popoverViewModel = vm
         self.popover = pop
@@ -96,8 +98,9 @@ final class StatusBarController {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             if let popoverWindow = popover.contentViewController?.view.window {
                 var f = popoverWindow.frame
-                f.origin.y -= 42
+                f.origin.y -= 100
                 popoverWindow.setFrameOrigin(f.origin)
+                popoverWindow.appearance = NSAppearance(named: .darkAqua)
             }
             NSApp.activate(ignoringOtherApps: true)
         }
