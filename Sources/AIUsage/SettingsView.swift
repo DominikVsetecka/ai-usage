@@ -210,7 +210,7 @@ private struct ProviderSettingsSection: View {
     private var testResultView: some View {
         switch testState {
         case .ok(let pct):
-            Label("\(pct)% · OK", systemImage: "checkmark.circle.fill")
+            Label("\(100 - pct)% left · OK", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green).font(.callout)
         case .failed(let msg):
             Label(msg, systemImage: "xmark.circle.fill")
