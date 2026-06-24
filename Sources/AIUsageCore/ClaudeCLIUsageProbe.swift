@@ -78,7 +78,9 @@ public struct ClaudeCLIUsageProbe: UsageProbing {
                 status: .ok,
                 updatedAt: Date(),
                 resetDescription: selected.resetDescription,
-                errorMessage: nil
+                errorMessage: nil,
+                fiveHour: parsed.session,
+                oneWeek: parsed.weekly
             )
         } catch {
             return failure(error.localizedDescription)
@@ -201,11 +203,6 @@ public struct ClaudeCLIUsageProbe: UsageProbing {
     private func failure(_ message: String) -> UsageSnapshot {
         UsageSnapshot(sourceID: sourceID, label: label, enabled: enabled, percentUsed: nil, status: .failed, updatedAt: Date(), errorMessage: message)
     }
-}
-
-public struct ProviderUsageWindow: Equatable, Sendable {
-    public let percentUsed: Int
-    public let resetDescription: String?
 }
 
 public struct ClaudeUsageResult: Equatable, Sendable {

@@ -265,7 +265,9 @@ public struct ClaudeOAuthUsageProbe: UsageProbing {
                 status: .ok,
                 updatedAt: Date(),
                 resetDescription: selected.resetDescription,
-                errorMessage: nil
+                errorMessage: nil,
+                fiveHour: result.session,
+                oneWeek: result.weekly
             )
         } catch {
             return failure(error.localizedDescription)

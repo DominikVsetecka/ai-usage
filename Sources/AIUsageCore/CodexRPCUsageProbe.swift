@@ -46,7 +46,9 @@ public struct CodexRPCUsageProbe: UsageProbing {
                 status: .ok,
                 updatedAt: Date(),
                 resetDescription: selected.resetDescription,
-                errorMessage: nil
+                errorMessage: nil,
+                fiveHour: result.primary,
+                oneWeek: result.secondary
             )
         } catch {
             return failure(error.localizedDescription)

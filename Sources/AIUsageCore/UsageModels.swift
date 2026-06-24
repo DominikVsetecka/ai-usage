@@ -7,6 +7,16 @@ public enum SourceStatus: String, Codable, Equatable, Sendable {
     case disabled
 }
 
+public struct ProviderUsageWindow: Equatable, Sendable {
+    public let percentUsed: Int
+    public let resetDescription: String?
+
+    public init(percentUsed: Int, resetDescription: String?) {
+        self.percentUsed = min(100, max(0, percentUsed))
+        self.resetDescription = resetDescription
+    }
+}
+
 public struct UsageSnapshot: Equatable, Sendable {
     public var sourceID: String
     public var label: String
@@ -17,6 +27,8 @@ public struct UsageSnapshot: Equatable, Sendable {
     public var updatedAt: Date?
     public var resetDescription: String?
     public var errorMessage: String?
+    public var fiveHour: ProviderUsageWindow?
+    public var oneWeek: ProviderUsageWindow?
 
     public init(
         sourceID: String,
@@ -27,7 +39,9 @@ public struct UsageSnapshot: Equatable, Sendable {
         status: SourceStatus,
         updatedAt: Date?,
         resetDescription: String? = nil,
-        errorMessage: String?
+        errorMessage: String?,
+        fiveHour: ProviderUsageWindow? = nil,
+        oneWeek: ProviderUsageWindow? = nil
     ) {
         self.sourceID = sourceID
         self.label = label
@@ -38,6 +52,8 @@ public struct UsageSnapshot: Equatable, Sendable {
         self.updatedAt = updatedAt
         self.resetDescription = resetDescription
         self.errorMessage = errorMessage
+        self.fiveHour = fiveHour
+        self.oneWeek = oneWeek
     }
 
     public static func idle(from config: SourceConfig) -> UsageSnapshot {

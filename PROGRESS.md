@@ -3,10 +3,11 @@
 ## Orbit refs
 
 - Project: `ai-usage`
-- Active tickets: `ORB-0120`, `ORB-0121`, `ORB-0122`
+- Active tickets: `ORB-0120`
+- Completed: `ORB-0113`–`ORB-0118`, `ORB-0121`, `ORB-0122`, `ORB-0123`
 - Triage / later: `ORB-0119`
 - Decisions: `DEC-0005`
-- Completed: `ORB-0113`, `ORB-0114`, `ORB-0115`, `ORB-0116`, `ORB-0117`, `ORB-0118`
+- Done: `ORB-0113`–`ORB-0118`, `ORB-0121`, `ORB-0122`, `ORB-0123`
 
 ## Stand
 
@@ -29,6 +30,8 @@ Current feature set:
 - Refresh is concurrent and incremental across providers; interval 15 s / 30 s / 1 min / 2 min / 5 min.
 - No cookie scraping, no Full Disk Access, no telemetry.
 - Optional secure Claude profiles are implemented: targeted import from the current Claude Code credential source, per-profile app-owned Keychain storage, direct OAuth usage, automatic refresh-token rotation, 15-minute cache and `Retry-After` handling. The global Claude Code login is never modified.
+- NSPopover replaces NSMenu as primary click interaction; shows 5-hour and 1-week windows per provider with integrated burn bar and hover tooltips.
+- Local JSONL usage history (`~/.ai-usage/history/`) with Canvas-based `BurnBarView`: solid fill (remaining) left, burn-rate sparkline (used, jetzt=links) right. Mouseover shows timestamp + value.
 
 ## Planned next
 
@@ -58,5 +61,8 @@ Current feature set:
 - `2026-06-24` — (ORB-0118) Provider icons (Claude SVG orange→template, OpenAI SVG black→template) in menu bar via `NSTextAttachment`; emoji/custom-text fallback. Stale-value preservation on probe failure (last good percent kept, shown dimmed). Configurable font size and weight in Settings. Text color mode: White / Dimmed / Usage gradient.
 - `2026-06-24` — Save & Refresh no longer closes the Settings window. Both provider icons changed to template images so they always match the text color.
 - `2026-06-24` — Removed "Emoji / custom" option from Icon Picker (redundant — emoji can be typed directly into Short Label). Cleaned up dead `"emoji"` branch in `iconModeBinding`. ORB-0119 opened: user-provided icon via file picker (Base64 or path in config) to avoid trademark issues with hardcoded brand SVGs.
+- `2026-06-24` — (ORB-0123) Local history + integrated burn bar: `UsageHistoryStore` actor schreibt `~/.ai-usage/history/YYYY-MM-DD.jsonl` bei ≥1% Änderung oder alle 30 Minuten. `BurnBarView` (Canvas, kein Swift Charts) ersetzt den Flat-Balken: links = verbleibendes Kontingent (solid fill, schrumpft), rechts = Burn-Kurve im verbrauchten Bereich (jetzt=links, älteste Daten=rechts). Höhere Kurve = schneller verbraucht. Mouseover zeigt Tooltip mit Uhrzeit + %-Wert. Reset-Zeit unter den Balken verschoben damit alle Balken gleich breit sind.
+- `2026-06-24` — (ORB-0122) NSPopover replaces NSMenu as primary click interaction. New `UsagePopoverView` (SwiftUI) + `PopoverViewModel` (ObservableObject). Header shows icon, title, refresh spinner, settings button. One `ProviderDetailSection` per enabled source with provider icon, label, stale badge. Two `WindowRow` entries per source (5-hour, 1-week) each with progress bar (green→red gradient), percentage, reset time. Missing windows show "—". Stale values dimmed at 60% opacity with clock badge + timestamp. Footer has Quit. `StatusBarController` rebuilt to own `NSPopover` and update view model on every render; menu removed.
+- `2026-06-24` — (ORB-0121) Two-window usage model: `ProviderUsageWindow` moved to shared `UsageModels.swift`; `UsageSnapshot` extended with `fiveHour` and `oneWeek`; all three probes (Claude CLI, Claude OAuth, Codex RPC) now populate both windows; `UsageMonitor` stale-preservation covers all four per-window fields; checks for two-window snapshot and stale merge added. Menu bar unaffected — still uses `percentUsed` from the selected window.
 - `2026-06-24` — Planned the next architecture in `ORB-0120`–`ORB-0122`: app-owned Keychain profiles without global Claude-login replacement, a two-window usage model, and a SwiftUI/AppKit menu-bar popover showing 5-hour and 1-week quota details for all active checks. Decision captured in `DEC-0005`.
 - `2026-06-24` — Implemented the `ORB-0120` secure-profile foundation and Settings workflow. Unit-style checks cover credential parsing, config secrecy, both usage windows and refresh-token rotation. A live check successfully imported the current Claude Code login into a temporary AI Usage Keychain item, fetched OAuth usage and removed the item afterward. A broad Keychain scan was rejected after it hung; official credential import now probes only the known service (or an explicit override) with a hard three-second timeout.

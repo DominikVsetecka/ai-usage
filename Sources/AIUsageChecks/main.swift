@@ -116,6 +116,40 @@ let claudeResult = try ClaudeCLIUsageProbe.parse(claudeOutput)
 check(claudeResult.session?.percentUsed == 22, "Claude parser should read current session percent used")
 check(claudeResult.weekly?.percentUsed == 61, "Claude parser should read weekly percent used")
 
+// Two-window snapshot: both windows preserved in UsageSnapshot
+let twoWindowSnapshot = UsageSnapshot(
+    sourceID: "claude1", label: "C1", enabled: true,
+    percentUsed: 22, status: .ok, updatedAt: nil, errorMessage: nil,
+    fiveHour: ProviderUsageWindow(percentUsed: 22, resetDescription: "Resets in 3h"),
+    oneWeek: ProviderUsageWindow(percentUsed: 61, resetDescription: "Resets Jun 30")
+)
+check(twoWindowSnapshot.fiveHour?.percentUsed == 22, "snapshot fiveHour should carry session window")
+check(twoWindowSnapshot.oneWeek?.percentUsed == 61, "snapshot oneWeek should carry weekly window")
+check(twoWindowSnapshot.percentUsed == 22, "snapshot percentUsed should reflect selected window for menu bar")
+
+// Stale preservation: fiveHour and oneWeek are preserved on failure
+let freshSnapshot = UsageSnapshot(
+    sourceID: "claude1", label: "C1", enabled: true,
+    percentUsed: 30, status: .ok, updatedAt: nil, errorMessage: nil,
+    fiveHour: ProviderUsageWindow(percentUsed: 30, resetDescription: "Resets in 2h"),
+    oneWeek: ProviderUsageWindow(percentUsed: 55, resetDescription: "Resets Mon")
+)
+let staleFailedSnapshot = UsageSnapshot(
+    sourceID: "claude1", label: "C1", enabled: true,
+    percentUsed: nil, status: .failed, updatedAt: nil, errorMessage: "timeout",
+    fiveHour: nil, oneWeek: nil
+)
+// Simulate monitor merge: on failure, carry over previous values
+var merged = staleFailedSnapshot
+if merged.percentUsed == nil { merged.percentUsed = freshSnapshot.percentUsed }
+if merged.resetDescription == nil { merged.resetDescription = freshSnapshot.resetDescription }
+if merged.fiveHour == nil { merged.fiveHour = freshSnapshot.fiveHour }
+if merged.oneWeek == nil { merged.oneWeek = freshSnapshot.oneWeek }
+check(merged.percentUsed == 30, "stale monitor merge should preserve percentUsed from previous snapshot")
+check(merged.fiveHour?.percentUsed == 30, "stale monitor merge should preserve fiveHour from previous snapshot")
+check(merged.oneWeek?.percentUsed == 55, "stale monitor merge should preserve oneWeek from previous snapshot")
+check(merged.status == .failed, "stale monitor merge should keep failed status")
+
 let redrawnClaudeOutput = """
 Curret session
 0% used

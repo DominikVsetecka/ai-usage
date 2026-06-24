@@ -34,19 +34,14 @@ public final class UsageMonitor {
             for await snapshot in group {
                 if let index = snapshots.firstIndex(where: { $0.sourceID == snapshot.sourceID }) {
                     let previous = snapshots[index]
-                    // On failure keep the last known percentUsed so the menu bar doesn't go blank
-                    if snapshot.status == .failed, snapshot.percentUsed == nil, let lastPercent = previous.percentUsed {
-                        snapshots[index] = UsageSnapshot(
-                            sourceID: snapshot.sourceID,
-                            label: snapshot.label,
-                            enabled: snapshot.enabled,
-                            percentUsed: lastPercent,
-                            displayValue: snapshot.displayValue,
-                            status: .failed,
-                            updatedAt: snapshot.updatedAt,
-                            resetDescription: previous.resetDescription,
-                            errorMessage: snapshot.errorMessage
-                        )
+                    if snapshot.status == .failed {
+                        // On failure preserve any last-known values so the menu bar and popover don't go blank
+                        var merged = snapshot
+                        if merged.percentUsed == nil { merged.percentUsed = previous.percentUsed }
+                        if merged.resetDescription == nil { merged.resetDescription = previous.resetDescription }
+                        if merged.fiveHour == nil { merged.fiveHour = previous.fiveHour }
+                        if merged.oneWeek == nil { merged.oneWeek = previous.oneWeek }
+                        snapshots[index] = merged
                     } else {
                         snapshots[index] = snapshot
                     }

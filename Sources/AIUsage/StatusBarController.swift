@@ -1,6 +1,7 @@
 import AIUsageCore
 import AppKit
 import Foundation
+import SwiftUI
 
 @MainActor
 final class StatusBarController {
@@ -9,12 +10,16 @@ final class StatusBarController {
     private(set) var config: AppConfig
     private let onOpenSettings: () -> Void
     private var timer: Timer?
+    private var popover: NSPopover?
+    private var popoverViewModel: PopoverViewModel?
+    private let historyStore: UsageHistoryStore
 
     init(config: AppConfig, onOpenSettings: @escaping () -> Void) {
         self.config = config
         self.monitor = UsageMonitor(config: config)
         self.onOpenSettings = onOpenSettings
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.historyStore = UsageHistoryStore(directory: Self.historyDirectory())
         configureStatusItem()
         render()
         scheduleRefresh()
@@ -24,14 +29,22 @@ final class StatusBarController {
         }
     }
 
+    private static func historyDirectory() -> URL {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? "~"
+        return URL(fileURLWithPath: home)
+            .appendingPathComponent(".ai-usage/history")
+    }
+
     func stop() {
         timer?.invalidate()
         timer = nil
+        popover?.performClose(nil)
     }
 
     func apply(config: AppConfig) {
         self.config = config
         self.monitor = UsageMonitor(config: config)
+        popoverViewModel?.config = config
         render()
         scheduleRefresh()
         Task { await refreshNow() }
@@ -39,7 +52,49 @@ final class StatusBarController {
 
     private func configureStatusItem() {
         renderStatusTitle()
-        statusItem.menu = buildMenu()
+        if let button = statusItem.button {
+            button.action = #selector(statusItemClicked)
+            button.target = self
+            button.sendAction(on: [.leftMouseUp])
+        }
+        setupPopover()
+    }
+
+    private func setupPopover() {
+        let vm = PopoverViewModel(config: config)
+        vm.snapshots = monitor.snapshots
+        vm.historyStore = historyStore
+        vm.onRefresh = { [weak self] in
+            Task { await self?.refreshNow() }
+        }
+        vm.onOpenSettings = { [weak self] in
+            self?.popover?.performClose(nil)
+            self?.onOpenSettings()
+        }
+        vm.onQuit = { [weak self] in
+            self?.stop()
+            NSApp.terminate(nil)
+        }
+
+        let pop = NSPopover()
+        pop.behavior = .transient
+        pop.animates = true
+        pop.contentViewController = NSHostingController(rootView: UsagePopoverView(viewModel: vm))
+
+        self.popoverViewModel = vm
+        self.popover = pop
+    }
+
+    @objc private func statusItemClicked() {
+        guard let popover else { return }
+        if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            guard let button = statusItem.button else { return }
+            popoverViewModel?.snapshots = monitor.snapshots
+            popoverViewModel?.config = config
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
     }
 
     private func scheduleRefresh() {
@@ -53,15 +108,22 @@ final class StatusBarController {
     }
 
     private func refreshNow() async {
+        popoverViewModel?.isRefreshing = true
         _ = await monitor.refresh { [weak self] _ in
             self?.render()
         }
+        await historyStore.record(monitor.snapshots)
+        if popover?.isShown == true {
+            await popoverViewModel?.loadHistory()
+        }
+        popoverViewModel?.isRefreshing = false
         render()
     }
 
     private func render() {
         renderStatusTitle()
-        statusItem.menu = buildMenu()
+        popoverViewModel?.snapshots = monitor.snapshots
+        popoverViewModel?.config = config
     }
 
     private func renderStatusTitle() {
@@ -123,7 +185,6 @@ final class StatusBarController {
             title.append(NSAttributedString(attachment: attachment))
             title.append(NSAttributedString(string: " \(value)", attributes: [.font: font, .foregroundColor: color]))
         } else if !iconName.isEmpty, iconName != "claude", iconName != "openai" {
-            // Emoji or custom text — render as label
             title.append(NSAttributedString(string: "\(iconName) \(value)", attributes: [.font: font, .foregroundColor: color]))
         } else {
             title.append(NSAttributedString(string: "\(snapshot.label) \(value)", attributes: [.font: font, .foregroundColor: color]))
@@ -151,80 +212,5 @@ final class StatusBarController {
             let remaining = 100 - min(100, max(0, pct))
             return NSColor(calibratedHue: CGFloat(remaining) / 300, saturation: 0.82, brightness: 0.88, alpha: 1)
         }
-    }
-
-    private func buildMenu() -> NSMenu {
-        let menu = NSMenu()
-
-        let title = NSMenuItem(
-            title: UsageFormatter.menuBarTitle(
-                for: monitor.snapshots,
-                remainingCountdown: config.showsRemainingCountdown
-            ),
-            action: nil,
-            keyEquivalent: ""
-        )
-        title.isEnabled = false
-        menu.addItem(title)
-        menu.addItem(.separator())
-
-        for snapshot in monitor.snapshots.filter(\.enabled) {
-            let value = snapshot.displayValue ?? snapshot.percentUsed.map {
-                let display = UsageFormatter.displayPercent(
-                    percentUsed: $0,
-                    remainingCountdown: config.showsRemainingCountdown
-                )
-                return "\(display)%"
-            } ?? "--%"
-            let updated = UsageFormatter.shortTime(snapshot.updatedAt)
-            let status = snapshot.status.rawValue
-            let reset = snapshot.resetDescription.map { "  \($0)" } ?? ""
-            let item = NSMenuItem(title: "\(snapshot.label): \(value)  \(status)  \(updated)\(reset)", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-
-            if let errorMessage = snapshot.errorMessage {
-                let error = NSMenuItem(title: "  \(errorMessage)", action: nil, keyEquivalent: "")
-                error.isEnabled = false
-                menu.addItem(error)
-            }
-        }
-
-        menu.addItem(.separator())
-
-        let refresh = NSMenuItem(title: "Refresh Now", action: #selector(refreshMenuAction), keyEquivalent: "r")
-        refresh.target = self
-        menu.addItem(refresh)
-
-        let interval = NSMenuItem(title: "Refresh every \(Int(monitor.refreshIntervalSeconds))s", action: nil, keyEquivalent: "")
-        interval.isEnabled = false
-        menu.addItem(interval)
-
-        let settings = NSMenuItem(title: "Settings…", action: #selector(settingsMenuAction), keyEquivalent: ",")
-        settings.target = self
-        menu.addItem(settings)
-
-        menu.addItem(.separator())
-
-        let quit = NSMenuItem(title: "Quit AI Usage", action: #selector(quitMenuAction), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
-
-        return menu
-    }
-
-    @objc private func refreshMenuAction() {
-        Task {
-            await refreshNow()
-        }
-    }
-
-    @objc private func quitMenuAction() {
-        stop()
-        NSApp.terminate(nil)
-    }
-
-    @objc private func settingsMenuAction() {
-        onOpenSettings()
     }
 }
