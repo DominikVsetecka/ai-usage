@@ -93,9 +93,12 @@ final class StatusBarController {
             guard let button = statusItem.button else { return }
             popoverViewModel?.snapshots = monitor.snapshots
             popoverViewModel?.config = config
-            var anchor = button.bounds
-            anchor.origin.y = min(anchor.origin.y + 16, anchor.size.height)
-            popover.show(relativeTo: anchor, of: button, preferredEdge: .minY)
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            if let popoverWindow = popover.contentViewController?.view.window {
+                var f = popoverWindow.frame
+                f.origin.y -= 8
+                popoverWindow.setFrameOrigin(f.origin)
+            }
             NSApp.activate(ignoringOtherApps: true)
         }
     }
