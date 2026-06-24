@@ -343,9 +343,9 @@ private struct BurnBarView: View {
 
                 // Burn sparkline
                 if burnPoints.count >= 2, sparkW > 8 {
-                    let pts = burnPoints, col = color, hv = hoveredPoint, rm = resetMarkerDate
+                    let pts = burnPoints, col = color, hv = hoveredPoint
                     Canvas { ctx, size in
-                        drawCurve(ctx: ctx, size: size, points: pts, color: col, inRight: remainingCountdown, hovered: hv, resetMarker: rm)
+                        drawCurve(ctx: ctx, size: size, points: pts, color: col, inRight: remainingCountdown, hovered: hv)
                     }
                     .frame(width: sparkW, height: H)
                     .offset(x: sparkOffX)
@@ -360,6 +360,31 @@ private struct BurnBarView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: Self.radius))
+            // Reset marker overlay — outside clipShape so it can extend above the bar
+            .overlay(alignment: .topLeading) {
+                let resetX: CGFloat? = {
+                    guard let rm = resetMarkerDate, burnPoints.count >= 2, sparkW > 8 else { return nil }
+                    let t0 = burnPoints.first!.ts
+                    let dt = burnPoints.last!.ts.timeIntervalSince(t0)
+                    guard dt > 0, rm >= t0, rm <= burnPoints.last!.ts else { return nil }
+                    return sparkOffX + CGFloat(1.0 - rm.timeIntervalSince(t0) / dt) * sparkW
+                }()
+                if let x = resetX {
+                    ZStack(alignment: .topLeading) {
+                        // Solid vertical line through the bar
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.35))
+                            .frame(width: 1.5, height: H)
+                            .offset(x: x - 0.75)
+                        // Dot above bar — clearly visible tick mark
+                        Circle()
+                            .fill(color)
+                            .frame(width: 5, height: 5)
+                            .offset(x: x - 2.5, y: -6)
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let loc):
@@ -403,8 +428,7 @@ private struct BurnBarView: View {
 private func drawCurve(
     ctx: GraphicsContext, size: CGSize,
     points: [BurnPoint], color: Color,
-    inRight: Bool, hovered: BurnPoint?,
-    resetMarker: Date? = nil
+    inRight: Bool, hovered: BurnPoint?
 ) {
     guard points.count >= 2 else { return }
     let t0 = points.first!.ts
@@ -445,19 +469,4 @@ private func drawCurve(
         )
     }
 
-    // Reset marker — vertical dashed line where the window reset occurred
-    if let rm = resetMarker, rm >= t0, rm <= points.last!.ts {
-        let x = CGFloat(1.0 - rm.timeIntervalSince(t0) / dt) * size.width
-        var line = Path()
-        line.move(to: CGPoint(x: x, y: 0))
-        line.addLine(to: CGPoint(x: x, y: size.height))
-        ctx.stroke(line, with: .color(color.opacity(0.5)),
-                   style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
-        // Small dot at the top
-        let r: CGFloat = 2
-        ctx.fill(
-            Path(ellipseIn: CGRect(x: x - r, y: -r, width: r * 2, height: r * 2)),
-            with: .color(color.opacity(0.7))
-        )
-    }
 }
