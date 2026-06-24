@@ -61,24 +61,20 @@ struct UsagePopoverView: View {
                     .frame(maxWidth: .infinity)
                     .padding(24)
             } else {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(Array(enabledSnapshots.enumerated()), id: \.element.sourceID) { index, snapshot in
-                            let source = viewModel.config.sources.first(where: { $0.id == snapshot.sourceID })
-                            ProviderDetailSection(
-                                snapshot: snapshot,
-                                source: source,
-                                config: viewModel.config,
-                                sparkPoints: viewModel.sparkPoints(for: snapshot.sourceID)
-                            )
-                            if index < enabledSnapshots.count - 1 {
-                                Divider().padding(.horizontal, 14)
-                            }
+                VStack(spacing: 0) {
+                    ForEach(Array(enabledSnapshots.enumerated()), id: \.element.sourceID) { index, snapshot in
+                        let source = viewModel.config.sources.first(where: { $0.id == snapshot.sourceID })
+                        ProviderDetailSection(
+                            snapshot: snapshot,
+                            source: source,
+                            config: viewModel.config,
+                            sparkPoints: viewModel.sparkPoints(for: snapshot.sourceID)
+                        )
+                        if index < enabledSnapshots.count - 1 {
+                            Divider().padding(.horizontal, 14)
                         }
                     }
-                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(maxHeight: 520)
             }
             Divider()
             popoverFooter
