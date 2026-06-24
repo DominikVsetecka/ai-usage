@@ -262,14 +262,33 @@ private struct WindowRow: View {
                 }
             }
 
-            if let reset = window?.resetDescription {
-                Text(reset)
+            if let window {
+                Text(resetLabel(for: window))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
-                    .padding(.leading, 54) // 46pt title + 8pt spacing
+                    .padding(.leading, 54)
             }
         }
         .opacity(isStale ? 0.6 : 1)
+    }
+
+    private func resetLabel(for window: ProviderUsageWindow) -> String {
+        if let at = window.resetsAt {
+            let remaining = at.timeIntervalSinceNow
+            if remaining > 0 {
+                let h = Int(remaining) / 3600
+                let m = (Int(remaining) % 3600) / 60
+                if h > 0 {
+                    return "Resets in \(h) hr \(m) min"
+                } else if m > 0 {
+                    return "Resets in \(m) min"
+                } else {
+                    return "Resets in <1 min"
+                }
+            }
+            return window.resetDescription ?? ""
+        }
+        return window.resetDescription ?? ""
     }
 
     private func barColor(pct: Int) -> Color {

@@ -10,10 +10,119 @@ public enum SourceStatus: String, Codable, Equatable, Sendable {
 public struct ProviderUsageWindow: Equatable, Sendable {
     public let percentUsed: Int
     public let resetDescription: String?
+    public let resetsAt: Date?
 
     public init(percentUsed: Int, resetDescription: String?) {
         self.percentUsed = min(100, max(0, percentUsed))
         self.resetDescription = resetDescription
+        self.resetsAt = Self.parseResetDate(from: resetDescription)
+    }
+
+    // Parses reset description strings like:
+    //   "Resets 1:30am (Europe/Vienna)"         → time-only, today or tomorrow
+    //   "Resets Jun 30 at 9pm (Europe/Vienna)"  → specific date + time
+    //   "Resets in 2h 15m"                      → relative from now
+    public static func parseResetDate(from description: String?) -> Date? {
+        guard let text = description else { return nil }
+
+        // Relative: "in 2h 15m", "Resets in 30m"
+        if text.localizedCaseInsensitiveContains("in ") {
+            if let rel = parseRelativeDuration(text) { return rel }
+        }
+
+        // Extract optional timezone "(Europe/Vienna)"
+        let tz: TimeZone
+        if let tzRange = text.range(of: #"\(([^)]+)\)"#, options: .regularExpression),
+           let id = text[tzRange].dropFirst().dropLast().trimmingCharacters(in: .whitespaces) as String?,
+           let zone = TimeZone(identifier: id) {
+            tz = zone
+        } else {
+            tz = .current
+        }
+
+        // Strip "Resets" prefix and timezone suffix, normalize "at" → ","
+        var cleaned = text
+        if let r = cleaned.range(of: "resets", options: .caseInsensitive) {
+            cleaned = String(cleaned[r.upperBound...])
+        }
+        cleaned = cleaned
+            .replacingOccurrences(of: #"\s*\([^)]+\)\s*"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+at\s+"#, with: ", ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+
+        let formats = [
+            "MMM d, yyyy, h:mma",
+            "MMM d, yyyy, ha",
+            "MMM d, yyyy",
+            "MMM d, h:mma",
+            "MMM d, ha",
+            "h:mma",
+            "ha",
+            "MMM d",
+        ]
+
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = tz
+
+        for format in formats {
+            fmt.dateFormat = format
+            if let parsed = fmt.date(from: cleaned) {
+                return resolveToFuture(parsed, format: format, tz: tz)
+            }
+        }
+        return nil
+    }
+
+    private static func parseRelativeDuration(_ text: String) -> Date? {
+        var total: TimeInterval = 0
+        if let m = text.range(of: #"(\d+)\s*d(?:ays?)?"#, options: .regularExpression) {
+            total += (Double(text[m].filter(\.isNumber)) ?? 0) * 86400
+        }
+        if let m = text.range(of: #"(\d+)\s*h(?:r|ours?)?"#, options: .regularExpression) {
+            total += (Double(text[m].filter(\.isNumber)) ?? 0) * 3600
+        }
+        if let m = text.range(of: #"(\d+)\s*m(?:in(?:utes?)?)?"#, options: .regularExpression) {
+            total += (Double(text[m].filter(\.isNumber)) ?? 0) * 60
+        }
+        return total > 0 ? Date().addingTimeInterval(total) : nil
+    }
+
+    private static func resolveToFuture(_ parsed: Date, format: String, tz: TimeZone) -> Date {
+        var cal = Calendar.current
+        cal.timeZone = tz
+        let now = Date()
+        if format.contains("yyyy") { return parsed }
+
+        let hasMonth = format.contains("MMM")
+        let hasTime  = format.contains("h")
+
+        if hasMonth && hasTime {
+            var c = cal.dateComponents([.month, .day, .hour, .minute], from: parsed)
+            c.year = cal.component(.year, from: now)
+            if let d = cal.date(from: c), d > now { return d }
+            c.year! += 1
+            return cal.date(from: c) ?? parsed
+        }
+        if hasMonth {
+            var c = cal.dateComponents([.month, .day], from: parsed)
+            c.year = cal.component(.year, from: now); c.hour = 0; c.minute = 0
+            if let d = cal.date(from: c), d > now { return d }
+            c.year! += 1
+            return cal.date(from: c) ?? parsed
+        }
+        if hasTime {
+            let pc = cal.dateComponents([.hour, .minute], from: parsed)
+            var tc = cal.dateComponents([.year, .month, .day], from: now)
+            tc.hour = pc.hour; tc.minute = pc.minute
+            if let d = cal.date(from: tc), d > now { return d }
+            if let tomorrow = cal.date(byAdding: .day, value: 1, to: now) {
+                tc = cal.dateComponents([.year, .month, .day], from: tomorrow)
+                tc.hour = pc.hour; tc.minute = pc.minute
+                return cal.date(from: tc) ?? parsed
+            }
+        }
+        return parsed
     }
 }
 
