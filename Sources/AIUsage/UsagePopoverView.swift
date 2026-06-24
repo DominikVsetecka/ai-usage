@@ -176,7 +176,6 @@ private struct ProviderDetailSection: View {
                 remainingCountdown: config.showsRemainingCountdown,
                 burnPoints: fiveHourBurn,
                 windowDuration: 5 * 3600,
-                sparklineStyle: config.sparklineStyle ?? .line,
                 sparklineDirection: config.sparklineDirection ?? .ascending
             )
             WindowRow(
@@ -186,7 +185,6 @@ private struct ProviderDetailSection: View {
                 remainingCountdown: config.showsRemainingCountdown,
                 burnPoints: oneWeekBurn,
                 windowDuration: 7 * 24 * 3600,
-                sparklineStyle: config.sparklineStyle ?? .line,
                 sparklineDirection: config.sparklineDirection ?? .ascending
             )
 
@@ -233,7 +231,6 @@ private struct WindowRow: View {
     let remainingCountdown: Bool
     let burnPoints: [BurnPoint]
     let windowDuration: TimeInterval
-    let sparklineStyle: SparklineStyle
     let sparklineDirection: SparklineDirection
 
     var body: some View {
@@ -256,7 +253,6 @@ private struct WindowRow: View {
                         color: color,
                         resetMarkerDate: resetMarker,
                         windowDuration: windowDuration,
-                        sparklineStyle: sparklineStyle,
                         sparklineDirection: sparklineDirection
                     )
 
@@ -317,7 +313,6 @@ private struct BurnBarView: View {
     let color: Color
     var resetMarkerDate: Date? = nil
     var windowDuration: TimeInterval = 0
-    var sparklineStyle: SparklineStyle = .line
     var sparklineDirection: SparklineDirection = .ascending
 
     @State private var hoveredPoint: BurnPoint? = nil
@@ -354,14 +349,9 @@ private struct BurnBarView: View {
 
                 // Burn sparkline
                 if burnPoints.count >= 2, sparkW > 8 {
-                    let pts = burnPoints, col = color, hv = hoveredPoint
-                    let style = sparklineStyle, dir = sparklineDirection
+                    let pts = burnPoints, col = color, hv = hoveredPoint, dir = sparklineDirection
                     Canvas { ctx, size in
-                        if style == .bars {
-                            drawBars(ctx: ctx, size: size, points: pts, color: col, direction: dir, hovered: hv)
-                        } else {
-                            drawCurve(ctx: ctx, size: size, points: pts, color: col, direction: dir, hovered: hv)
-                        }
+                        drawCurve(ctx: ctx, size: size, points: pts, color: col, direction: dir, hovered: hv)
                     }
                     .frame(width: sparkW, height: H)
                     .offset(x: sparkOffX)
@@ -502,27 +492,3 @@ private func drawCurve(
     }
 }
 
-private func drawBars(
-    ctx: GraphicsContext, size: CGSize,
-    points: [BurnPoint], color: Color,
-    direction: SparklineDirection, hovered: BurnPoint?
-) {
-    guard points.count >= 2 else { return }
-    let t0 = points.first!.ts
-    let dt = points.last!.ts.timeIntervalSince(t0)
-    guard dt > 0 else { return }
-
-    let barW: CGFloat = 5
-    let baseline = sparklineBaseline(height: size.height, direction: direction)
-
-    for bp in points {
-        let x = sparklineX(ts: bp.ts, t0: t0, dt: dt, width: size.width)
-        let tip = sparklineY(pct: bp.pct, height: size.height, direction: direction)
-        let barH = abs(baseline - tip)
-        guard barH > 0 else { continue }
-        let barY = min(baseline, tip)
-        let rect = CGRect(x: x - barW / 2, y: barY, width: barW, height: barH)
-        let isHovered = hovered?.id == bp.id
-        ctx.fill(Path(roundedRect: rect, cornerRadius: 1.5), with: .color(color.opacity(isHovered ? 0.9 : 0.65)))
-    }
-}

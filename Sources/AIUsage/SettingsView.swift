@@ -85,12 +85,6 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.menu)
 
-                    Picker("Sparkline style", selection: sparklineStyleBinding) {
-                        Text("Line (default)").tag(SparklineStyle.line)
-                        Text("Bars").tag(SparklineStyle.bars)
-                    }
-                    .pickerStyle(.segmented)
-
                     Picker("Sparkline direction", selection: sparklineDirectionBinding) {
                         Text("Ascending — rises with usage").tag(SparklineDirection.ascending)
                         Text("Descending — drops from top").tag(SparklineDirection.descending)
@@ -153,13 +147,6 @@ struct SettingsView: View {
         Binding(
             get: { draft.textColorMode ?? .primary },
             set: { draft.textColorMode = $0 == .primary ? nil : $0 }
-        )
-    }
-
-    private var sparklineStyleBinding: Binding<SparklineStyle> {
-        Binding(
-            get: { draft.sparklineStyle ?? .line },
-            set: { draft.sparklineStyle = $0 == .line ? nil : $0 }
         )
     }
 
