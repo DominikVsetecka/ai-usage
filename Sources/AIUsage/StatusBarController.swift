@@ -95,12 +95,13 @@ final class StatusBarController {
             popoverViewModel?.snapshots = monitor.snapshots
             popoverViewModel?.config = config
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            NSApp.activate(ignoringOtherApps: true)
             if let popoverWindow = popover.contentViewController?.view.window {
+                popoverWindow.appearance = NSAppearance(named: .darkAqua)
                 var f = popoverWindow.frame
                 f.origin.y -= 60
                 popoverWindow.setFrameOrigin(f.origin)
             }
-            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
