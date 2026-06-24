@@ -15,6 +15,13 @@ secrets/
 *.pem
 *.key
 
+# Internal dev notes (not for public repo)
+ROADMAP.md
+PROGRESS.md
+PLAN.md
+CLAUDE.md
+AGENTS.md
+
 # Local editor state
 .vscode/
 .idea/
