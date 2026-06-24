@@ -118,6 +118,7 @@ public struct SourceConfig: Codable, Equatable, Sendable {
     public var localPath: String?
     public var quota: QuotaSelection?
     public var iconName: String?
+    public var iconData: String?     // Base64-encoded image (SVG/PNG); takes priority over iconName
     public var claudeProfile: ClaudeProfile?
 
     public init(
@@ -129,6 +130,7 @@ public struct SourceConfig: Codable, Equatable, Sendable {
         localPath: String? = nil,
         quota: QuotaSelection? = .session,
         iconName: String? = nil,
+        iconData: String? = nil,
         claudeProfile: ClaudeProfile? = nil
     ) {
         self.id = id
@@ -139,6 +141,7 @@ public struct SourceConfig: Codable, Equatable, Sendable {
         self.localPath = localPath
         self.quota = quota
         self.iconName = iconName
+        self.iconData = iconData
         self.claudeProfile = claudeProfile
     }
 }

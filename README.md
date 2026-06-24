@@ -1,199 +1,88 @@
 # AI Usage
 
-Local-first macOS menu bar app for compact AI quota visibility.
+A lightweight macOS menu bar app that shows your Claude and Codex quota at a glance.
 
-AI Usage displays Claude and Codex quota percentages side by side without sending telemetry or storing account data in the repository.
-
-## Current Status
-
-The app is functional for local use:
-
-- Claude usage is read from the authenticated Claude CLI `/usage` screen.
-- Codex usage is read through the local read-only `codex app-server` JSON-RPC interface.
-- Values refresh concurrently and remain visible when a provider temporarily fails.
-- Settings, remaining-quota mode, provider icons and connection checks are implemented.
-- Claude sources can optionally import the current Claude Code account into a separate app-owned macOS Keychain profile and fetch usage directly.
-
-A click popover with both 5-hour and 1-week windows is planned next. See `PLAN.md` and `ROADMAP.md`.
-
-## Goal
-
-Build a reduced ClaudeBar-inspired Swift app that shows one to three usage percentages directly in the macOS menu bar:
-
-```text
-C1 43%  C2 71%  GPT 12%
+```
+C1 43%  GPT 12%
 ```
 
-The app is intentionally local-first and narrow in scope. It should be easy to run for one user, but avoid broad permissions and avoid scraping browser data unless there is no better option.
-
-## Scope
-
-MVP:
-
-- Native macOS menu bar app.
-- Three configurable sources: Claude subscription 1, Claude subscription 2, GPT Codex.
-- Default refresh interval: 30 seconds.
-- Refresh interval configurable.
-- Optional remaining-quota countdown from 100% to 0%.
-- Countdown colors transition from green through yellow to red.
-- Menu actions: refresh now, settings, show last update / errors, quit.
-- Claude quota via the authenticated Claude CLI `/usage` screen.
-- Codex quota via `codex app-server` JSON-RPC.
-- Fixture-backed parsers and lightweight tests.
-
-Out of scope for the MVP:
-
-- Auto-updater.
-- Public release, notarization, Homebrew cask.
-- Browser cookie scraping.
-- Full Disk Access.
-- Historical analytics dashboard.
-- Themes and notifications.
-
-## Security Model
-
-The app should be boring and constrained:
-
-- No telemetry.
-- The current implementation uses only the official local CLIs and no direct Claude network client.
-- No browser cookie reads.
-- No Full Disk Access requirement.
-- No shell string execution.
-- Commands run through `Process` with executable path plus argument array.
-- Probe output is parsed into percentages and status only.
-- Raw command output is not persisted.
-- Probe timeouts prevent hanging menu bar refreshes.
-
-The planned Claude profile mode is deliberately narrower than browser/API scraping: it imports the currently authenticated Claude Code OAuth credentials into a separate app-owned Keychain item and uses them only for quota and token refresh. It never reads browser storage or swaps the global Claude Code login. See `PLAN.md` and `ROADMAP.md`.
-
-### Repository privacy
-
-The repository contains no connected account data, email addresses, OAuth tokens, session cookies or captured provider responses. Runtime configuration is stored outside the repository at `~/.ai-usage/config.json`; current CLI credentials remain owned by the official Claude and Codex tools.
-
-The planned profile implementation follows the same boundary:
-
-- secrets are stored only in per-profile macOS Keychain items
-- `config.json` contains non-secret metadata and Keychain references only
-- credentials and raw authenticated responses are never committed or logged
-- `.gitignore` excludes local config, environment and secret-file patterns
-
-## Planned Stack
-
-- Swift.
-- AppKit `NSStatusItem` for menu bar rendering.
-- `NSMenu` for the current controls; `NSPopover` + SwiftUI is planned for the two-window detail view.
-- Swift Package Manager.
-- No third-party dependencies unless a concrete need appears.
+Click the menu bar item to open a popover with per-provider details, burn-rate sparklines, and reset countdowns.
 
 ## Requirements
 
-- macOS 13 or newer
-- Swift 6 toolchain
-- Claude Code CLI for Claude checks
-- Codex CLI for Codex checks
+- macOS 13 Ventura or later
+- Swift 6 toolchain (Xcode 16+ or [swift.org](https://swift.org/download/))
+- **`claude`** — [Anthropic Claude Code](https://claude.ai/code) installed and in `$PATH`
+- **`codex`** — [OpenAI Codex CLI](https://github.com/openai/codex) installed and in `$PATH`
 
-## Local Usage
+Each provider can be individually disabled in Settings if not installed.
 
-Build:
+## Build & Run
 
-```sh
-swift build
-```
-
-Run the menu bar app:
-
-```sh
+```bash
+git clone https://github.com/DominikVsetecka/ai-usage.git
+cd ai-usage
 swift run AIUsage
 ```
 
-Or double-click:
+Build a release binary:
 
-```text
-start-ai-usage.command
+```bash
+swift build -c release
+# .build/release/AIUsage
 ```
 
-Run the lightweight checks:
+Print current values without starting the menu bar app:
 
-```sh
-swift run AIUsageChecks
-```
-
-Print the current values in Terminal without starting the menu bar app:
-
-```sh
+```bash
 swift run AIUsageSnapshot
 ```
 
-The current CommandLineTools setup does not expose `XCTest` or Swift `Testing`, so the project uses `AIUsageChecks` as a small assertion-based verification executable.
+## Features
 
-Final local use can remain unsigned for this machine. Distribution to other machines would require signing and possibly notarization.
+- **Menu bar** — one value per enabled provider; configurable font size, weight, and color mode (white / dimmed / usage gradient)
+- **Popover** — 5-hour and 1-week quota windows per provider with integrated burn-rate sparkline, percentage, and reset countdown ("Resets in 2 hr 15 min")
+- **Reset marker** — dot + vertical line in the sparkline marks where the last quota reset occurred
+- **Local history** — usage logged to `~/.ai-usage/history/YYYY-MM-DD.jsonl` on ≥1% change or every 30 min; 30-day retention
+- **History tab** — line chart with 1-day / 7-day / 30-day picker; "Show in Finder" button opens the history folder
+- **Secure Claude profiles** — OAuth credentials imported into a separate app-owned Keychain entry; never touches Claude Code's own login
+- **Custom icons** — pick any SVG or PNG per provider via file picker; stored as Base64 in `config.json`
+- **Configurable refresh** — 15 s / 30 s / 1 min / 2 min / 5 min
 
 ## Configuration
 
-Open the menu bar item and choose `Settings…`.
+First launch creates a default config at `~/.ai-usage/config.json`. All settings are editable via the popover's gear icon.
 
-Each provider has its own settings:
+History is stored at `~/.ai-usage/history/` and is not committed to git.
 
-- enabled/disabled
-- short menu bar label
-- session or weekly quota
-- CLI binary path
-- Claude only: `CLAUDE_CONFIG_DIR` for a separate account
-- Claude only: CLI or secure Keychain profile connection
+### Second Claude subscription
 
-General settings include `Remaining countdown (100% to 0%)`:
-
-- off: display percent used
-- on: display percent remaining (`100 - used`)
-- 100% remaining is green
-- 0% remaining is red
-- no usage naturally displays 100%
-
-Default fetch workflow:
-
-- `C1`: starts `claude /usage --allowed-tools ""` in a pseudo-terminal and parses `% used`
-- `C2`: same CLI workflow, disabled until a second config directory is authenticated
-- `GPT`: starts `codex -s read-only -a untrusted app-server`, initializes JSON-RPC and calls `account/rateLimits/read`
-
-If a source cannot produce a percentage, it is shown as `--%` with the concrete error in the menu.
-
-Refresh keeps the last known values visible. Claude and Codex refresh concurrently, and each result is rendered as soon as it arrives instead of replacing the title with a temporary `AI ...` label.
-
-Optional config path:
-
-```sh
-AI_USAGE_CONFIG=/path/to/config.json swift run AIUsage
-```
-
-Default config lookup path:
-
-```text
-~/.ai-usage/config.json
-```
-
-Settings are saved automatically to this file. `config.example.json` documents the complete structure.
-
-For a second Claude subscription, authenticate a separate config directory once:
-
-```sh
+```bash
 CLAUDE_CONFIG_DIR=~/.claude-account-2 claude auth login
 ```
 
-Then enable Claude Subscription 2 in Settings and use `~/.claude-account-2` as its `CLAUDE_CONFIG_DIR`.
+Enable Claude 2 in Settings and set `CLAUDE_CONFIG_DIR` to `~/.claude-account-2`.
 
-No browser cookies, repository-local OAuth token files or Full Disk Access are used. In CLI mode, credentials remain owned by the official tools. In secure-profile mode, imported Claude OAuth secrets exist only in app-owned Keychain items.
+### Secure profile mode
 
-### Secure Claude profiles
+Import the current Claude Code login into an isolated Keychain item without touching Claude Code's own credentials:
 
-The optional secure-profile mode removes the need to maintain multiple `CLAUDE_CONFIG_DIR` folders:
+1. Log in with Claude Code using the first account.
+2. Settings → Claude 1 → Connection: "Secure profile" → "Import Current Claude Account" → Save.
+3. Switch Claude Code to the second account and repeat for Claude 2.
 
-1. Log Claude Code into the first account using the official CLI.
-2. Open AI Usage Settings for Claude 1, select `Secure profile`, then choose `Import Current Claude Account`.
-3. Save the settings.
-4. Log Claude Code into the second account.
-5. Repeat the import under Claude 2, then save again.
-6. Restore Claude Code to whichever account you want to use interactively.
+AI Usage never writes to Claude Code's Keychain item or `~/.claude.json`.
 
-AI Usage copies only the OAuth fields required for quota and refresh into separate Keychain items. Importing, refreshing, replacing or removing an AI Usage profile never writes to Claude Code's Keychain item or `~/.claude.json`.
+## Privacy
 
-The direct OAuth usage endpoint is not a documented public Anthropic API and may change. AI Usage therefore keeps the Claude CLI mode available as a fallback, caches successful direct responses for 15 minutes and honours provider rate limits.
+- No telemetry, no analytics, no network requests beyond the CLIs you configure
+- All data stays locally under `~/.ai-usage/`
+- History files are gitignored; no account data is committed
+
+## License
+
+MIT
+
+---
+
+by [Dominik Vsetecka](https://github.com/DominikVsetecka)

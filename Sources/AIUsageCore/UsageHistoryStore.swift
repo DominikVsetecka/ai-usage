@@ -11,7 +11,7 @@ public struct UsageHistoryEntry: Codable, Sendable {
 }
 
 public actor UsageHistoryStore {
-    private let directory: URL
+    public nonisolated let directory: URL
     private var lastRecorded: [String: UsageHistoryEntry.WindowSnapshot] = [:]
     private var lastWriteDate: Date?
     private var lastCleanDate: Date?

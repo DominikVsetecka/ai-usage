@@ -4,7 +4,8 @@
 
 - Project: `ai-usage`
 - Active tickets: `ORB-0120`
-- Completed: `ORB-0113`–`ORB-0118`, `ORB-0121`, `ORB-0122`, `ORB-0123`
+- Completed: `ORB-0119`
+- Completed: `ORB-0113`–`ORB-0118`, `ORB-0119`, `ORB-0121`, `ORB-0122`, `ORB-0123`
 - Triage / later: `ORB-0119`
 - Decisions: `DEC-0005`
 - Done: `ORB-0113`–`ORB-0118`, `ORB-0121`, `ORB-0122`, `ORB-0123`
@@ -40,7 +41,6 @@ Current feature set:
 ## Planned next
 
 - Secure Claude account profiles (ORB-0120): import Claude Code OAuth credentials per profile into app-owned Keychain; direct OAuth usage without CLI PTY.
-- User-provided icon via file picker (ORB-0119): Base64 or path in config to avoid hardcoded brand SVGs.
 
 ## Verification
 
@@ -72,3 +72,8 @@ Current feature set:
 - `2026-06-24` — History-Tab in Settings: Line-Chart (5h solid, 1w gestrichelt) mit 1d/7d/30d-Picker; scrollbare Tabelle der letzten Einträge. Popover-Höhe dynamisch (fixedSize), Popover wird sofort aktiv beim Klick (NSApp.activate).
 - `2026-06-24` — Reset-Countdown: `ProviderUsageWindow.resetsAt: Date?` wird automatisch aus `resetDescription` geparst (time-only, month+day+time, relative, Zeitzone aus Klammern). Popover zeigt „Resets in X hr Y min".
 - `2026-06-24` — Reset-Marker im Burn-Balken: gestrichelte Vertikallinie + Punkt an der Position des letzten Resets (`resetsAt − windowDuration`), nur wenn der Reset im sichtbaren History-Zeitraum liegt.
+- `2026-06-24` — Reset-Marker jetzt auf allen vier Balken (5h Claude, 1w Claude, 5h Codex, 1w Codex): `BurnBarView` erhält `windowDuration`-Parameter; Fallback-Position via `resetAge / windowDuration * sparkW` wenn keine Burn-History vorhanden oder Reset außerhalb des Sparkline-Zeitraums liegt.
+- `2026-06-24` — (ORB-0119) Icon-Datei-Picker: Picker-Dropdown entfernt, stattdessen NSOpenPanel-Button pro Provider; ausgewähltes SVG/PNG wird als Base64 in `SourceConfig.iconData` gespeichert; `ProviderIconRenderer` priorisiert `iconData` vor legacy `iconName`; "claude"/"openai" bleiben als Fallback für bestehende Configs.
+- `2026-06-24` — Info-Tab in Settings: App-Name, Version, "by Dominik Vsetecka", GitHub-Link, Requirements-Übersicht (claude CLI, codex CLI).
+- `2026-06-24` — History-Tab: "Show in Finder"-Button öffnet `~/.ai-usage/history/` direkt im Finder; `UsageHistoryStore.directory` als `public nonisolated let` exponiert.
+- `2026-06-24` — README für öffentliches GitHub-Repo geschrieben: Requirements, Build & Run, Feature-Liste, Config-Anleitung, Privacy-Note.

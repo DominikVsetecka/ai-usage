@@ -199,8 +199,7 @@ private struct ProviderDetailSection: View {
 
     @ViewBuilder
     private var providerIcon: some View {
-        if let iconName = source?.iconName,
-           let nsImage = ProviderIconRenderer.image(named: iconName, size: 14, color: .labelColor) {
+        if let nsImage = ProviderIconRenderer.image(iconData: source?.iconData, iconName: source?.iconName, size: 14, color: .labelColor) {
             Image(nsImage: nsImage)
                 .interpolation(.high)
                 .antialiased(true)
@@ -249,7 +248,8 @@ private struct WindowRow: View {
                         currentPct: window.percentUsed,
                         remainingCountdown: remainingCountdown,
                         color: color,
-                        resetMarkerDate: resetMarker
+                        resetMarkerDate: resetMarker,
+                        windowDuration: windowDuration
                     )
 
                     Text("\(displayPct)%")
@@ -308,6 +308,7 @@ private struct BurnBarView: View {
     let remainingCountdown: Bool
     let color: Color
     var resetMarkerDate: Date? = nil
+    var windowDuration: TimeInterval = 0
 
     @State private var hoveredPoint: BurnPoint? = nil
     @State private var hoverX: CGFloat = 0
@@ -363,11 +364,20 @@ private struct BurnBarView: View {
             // Reset marker overlay — outside clipShape so it can extend above the bar
             .overlay(alignment: .topLeading) {
                 let resetX: CGFloat? = {
-                    guard let rm = resetMarkerDate, burnPoints.count >= 2, sparkW > 8 else { return nil }
-                    let t0 = burnPoints.first!.ts
-                    let dt = burnPoints.last!.ts.timeIntervalSince(t0)
-                    guard dt > 0, rm >= t0, rm <= burnPoints.last!.ts else { return nil }
-                    return sparkOffX + CGFloat(1.0 - rm.timeIntervalSince(t0) / dt) * sparkW
+                    guard let rm = resetMarkerDate, sparkW > 0 else { return nil }
+                    // Prefer sparkline-aligned position when history spans the reset point
+                    if burnPoints.count >= 2 {
+                        let t0 = burnPoints.first!.ts
+                        let dt = burnPoints.last!.ts.timeIntervalSince(t0)
+                        if dt > 0, rm >= t0, rm <= burnPoints.last!.ts {
+                            return sparkOffX + CGFloat(1.0 - rm.timeIntervalSince(t0) / dt) * sparkW
+                        }
+                    }
+                    // Fallback: position by window-fraction (works even without burn history)
+                    guard windowDuration > 0 else { return nil }
+                    let resetAge = -rm.timeIntervalSinceNow  // positive when rm is in the past
+                    guard resetAge > 0, resetAge < windowDuration else { return nil }
+                    return sparkOffX + CGFloat(resetAge / windowDuration) * sparkW
                 }()
                 if let x = resetX {
                     ZStack(alignment: .topLeading) {

@@ -177,16 +177,12 @@ final class StatusBarController {
         font: NSFont,
         fontSize: CGFloat
     ) {
-        let iconName = source?.iconName ?? ""
-
-        if let icon = ProviderIconRenderer.image(named: iconName, size: fontSize, color: color) {
+        if let icon = ProviderIconRenderer.image(iconData: source?.iconData, iconName: source?.iconName, size: fontSize, color: color) {
             let attachment = NSTextAttachment()
             attachment.image = icon
             attachment.bounds = CGRect(x: 0, y: -floor(fontSize * 0.18), width: fontSize, height: fontSize)
             title.append(NSAttributedString(attachment: attachment))
             title.append(NSAttributedString(string: " \(value)", attributes: [.font: font, .foregroundColor: color]))
-        } else if !iconName.isEmpty, iconName != "claude", iconName != "openai" {
-            title.append(NSAttributedString(string: "\(iconName) \(value)", attributes: [.font: font, .foregroundColor: color]))
         } else {
             title.append(NSAttributedString(string: "\(snapshot.label) \(value)", attributes: [.font: font, .foregroundColor: color]))
         }

@@ -2,6 +2,7 @@ import AIUsageCore
 import AppKit
 import Charts
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @State private var draft: AppConfig
@@ -11,7 +12,7 @@ struct SettingsView: View {
 
     @State private var selectedTab: SettingsTab = .settings
 
-    enum SettingsTab { case settings, history }
+    enum SettingsTab { case settings, history, info }
 
     init(config: AppConfig, historyStore: UsageHistoryStore, onSave: @escaping (AppConfig) -> Void, onCancel: @escaping () -> Void) {
         _draft = State(initialValue: config)
@@ -33,6 +34,10 @@ struct SettingsView: View {
                 HistoryView(historyStore: historyStore, config: draft)
                     .tabItem { Label("History", systemImage: "chart.line.uptrend.xyaxis") }
                     .tag(SettingsTab.history)
+
+                InfoView()
+                    .tabItem { Label("Info", systemImage: "info.circle") }
+                    .tag(SettingsTab.info)
             }
         }
         .frame(minWidth: 560, minHeight: 660)
@@ -234,12 +239,43 @@ private struct ProviderSettingsSection: View {
                     .foregroundStyle(.secondary)
             }
 
-            Picker("Icon", selection: iconModeBinding) {
-                Text("Label text").tag("none")
-                Text("Claude Logo").tag("claude")
-                Text("OpenAI Logo").tag("openai")
+            LabeledContent("Icon") {
+                HStack(spacing: 8) {
+                    if let img = ProviderIconRenderer.image(iconData: source.iconData, iconName: source.iconName, size: 16, color: .labelColor) {
+                        Image(nsImage: img)
+                            .interpolation(.high)
+                            .antialiased(true)
+                    }
+                    Text(iconDisplayName)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    if source.iconData != nil || source.iconName != nil {
+                        Button {
+                            source.iconData = nil
+                            source.iconName = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+                    Button("Choose…") {
+                        let panel = NSOpenPanel()
+                        panel.allowedContentTypes = [.image]
+                        panel.allowsMultipleSelection = false
+                        panel.canChooseDirectories = false
+                        panel.message = "Choose an SVG or PNG icon for this provider"
+                        if panel.runModal() == .OK,
+                           let url = panel.url,
+                           let data = try? Data(contentsOf: url) {
+                            source.iconData = data.base64EncodedString()
+                            source.iconName = nil
+                        }
+                    }
+                }
             }
-            .pickerStyle(.menu)
 
             HStack(spacing: 10) {
                 Button {
@@ -482,23 +518,14 @@ private struct ProviderSettingsSection: View {
         )
     }
 
-    private var iconModeBinding: Binding<String> {
-        Binding(
-            get: {
-                switch source.iconName {
-                case "claude": return "claude"
-                case "openai": return "openai"
-                default: return "none"
-                }
-            },
-            set: { mode in
-                switch mode {
-                case "claude": source.iconName = "claude"
-                case "openai": source.iconName = "openai"
-                default: source.iconName = nil
-                }
-            }
-        )
+    private var iconDisplayName: String {
+        if source.iconData != nil { return "Custom icon" }
+        switch source.iconName {
+        case "claude": return "Claude (built-in)"
+        case "openai": return "OpenAI (built-in)"
+        case let name? where !name.isEmpty: return name
+        default: return "None"
+        }
     }
 
 }
@@ -549,6 +576,12 @@ private struct HistoryView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 200)
+                Button {
+                    NSWorkspace.shared.open(historyStore.directory)
+                } label: {
+                    Image(systemName: "folder")
+                }
+                .help("Show history folder in Finder")
             }
 
             if isLoading {
@@ -657,6 +690,87 @@ private struct HistoryView: View {
                 }
             }
             .frame(maxHeight: 220)
+        }
+    }
+}
+
+// MARK: - Info tab
+
+private struct InfoView: View {
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            VStack(spacing: 6) {
+                Image(systemName: "gauge.with.dots.needle.67percent")
+                    .font(.system(size: 52, weight: .light))
+                    .foregroundStyle(.tint)
+                    .padding(.bottom, 4)
+                Text("AI Usage")
+                    .font(.largeTitle.weight(.semibold))
+                Text("Version 1.0")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("by Dominik Vsetecka")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                NSWorkspace.shared.open(URL(string: "https://github.com/DominikVsetecka/ai-usage")!)
+            } label: {
+                Label("github.com/DominikVsetecka/ai-usage", systemImage: "link")
+            }
+            .buttonStyle(.link)
+
+            Divider()
+                .frame(maxWidth: 380)
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Requirements")
+                    .font(.headline)
+                InfoRequirementRow(
+                    icon: "apple.terminal",
+                    name: "claude",
+                    detail: "Anthropic Claude Code CLI — provides the /usage command"
+                )
+                InfoRequirementRow(
+                    icon: "apple.terminal",
+                    name: "codex",
+                    detail: "OpenAI Codex CLI — communicates via app-server JSON-RPC"
+                )
+                Text("Each provider can be disabled in Settings if not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 2)
+            }
+            .frame(maxWidth: 380, alignment: .leading)
+
+            Spacer()
+        }
+        .padding(28)
+    }
+}
+
+private struct InfoRequirementRow: View {
+    let icon: String
+    let name: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .frame(width: 20)
+                .foregroundStyle(.secondary)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(.callout.weight(.medium))
+                    .fontDesign(.monospaced)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }
