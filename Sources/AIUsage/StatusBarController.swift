@@ -12,7 +12,7 @@ final class StatusBarController {
     private var timer: Timer?
     private var popover: NSPopover?
     private var popoverViewModel: PopoverViewModel?
-    private let historyStore: UsageHistoryStore
+    let historyStore: UsageHistoryStore
 
     init(config: AppConfig, onOpenSettings: @escaping () -> Void) {
         self.config = config
@@ -94,6 +94,7 @@ final class StatusBarController {
             popoverViewModel?.snapshots = monitor.snapshots
             popoverViewModel?.config = config
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 

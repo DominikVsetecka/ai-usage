@@ -77,7 +77,8 @@ struct UsagePopoverView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 420)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxHeight: 520)
             }
             Divider()
             popoverFooter
@@ -286,7 +287,8 @@ private struct BurnBarView: View {
     @State private var hoveredPoint: BurnPoint? = nil
     @State private var hoverX: CGFloat = 0
 
-    private static let barHeight: CGFloat = 16
+    private static let barHeight: CGFloat = 13
+    private static let radius:    CGFloat = 6.5  // capsule
     private static let tooltipFmt: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
@@ -297,47 +299,42 @@ private struct BurnBarView: View {
         GeometryReader { geo in
             let W = geo.size.width
             let H = geo.size.height
-            // fillFrac: how much of the bar is solid-filled
-            // countdown → remaining on left; used → used on left
             let fillFrac = CGFloat(max(0, min(100, remainingCountdown ? 100 - currentPct : currentPct))) / 100
             let fillW = W * fillFrac
-            // Sparkline lives in the "used" zone
-            // countdown: used zone is on the RIGHT (after the remaining fill)
-            // used mode: used zone is on the LEFT (inside the fill, as overlay)
             let sparkOffX: CGFloat = remainingCountdown ? fillW : 0
             let sparkW: CGFloat = remainingCountdown ? (W - fillW) : fillW
 
             ZStack(alignment: .leading) {
-                // 1. Track background
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(.secondary.opacity(0.12))
+                // Track
+                RoundedRectangle(cornerRadius: Self.radius)
+                    .fill(.secondary.opacity(0.09))
 
-                // 2. Solid fill (remaining capacity or used amount)
-                color.opacity(0.78)
-                    .frame(width: max(0, fillW), height: H)
+                // Solid fill — capsule pill, sharp right edge clipped by outer shape
+                if fillW > 0 {
+                    RoundedRectangle(cornerRadius: Self.radius)
+                        .fill(color)
+                        .frame(width: fillW, height: H)
+                }
 
-                // 3. Burn curve via Canvas — no Swift Charts overhead, respects exact frame
-                if burnPoints.count >= 2, sparkW > 6 {
-                    let pts = burnPoints
-                    let col = color
-                    let inRight = remainingCountdown
-                    let hv = hoveredPoint
+                // Burn sparkline
+                if burnPoints.count >= 2, sparkW > 8 {
+                    let pts = burnPoints, col = color, hv = hoveredPoint
                     Canvas { ctx, size in
-                        drawCurve(ctx: ctx, size: size, points: pts, color: col, inRight: inRight, hovered: hv)
+                        drawCurve(ctx: ctx, size: size, points: pts, color: col, inRight: remainingCountdown, hovered: hv)
                     }
                     .frame(width: sparkW, height: H)
                     .offset(x: sparkOffX)
                 }
 
-                // 4. Hover crosshair
+                // Hover crosshair
                 if hoveredPoint != nil {
                     Rectangle()
-                        .fill(Color.primary.opacity(0.18))
+                        .fill(Color.primary.opacity(0.13))
                         .frame(width: 1, height: H)
                         .offset(x: hoverX - 0.5)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .clipShape(RoundedRectangle(cornerRadius: Self.radius))
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let loc):
@@ -397,21 +394,21 @@ private func drawCurve(
 
     let pts = points.map(toPoint)
 
-    // Area fill
+    // Very subtle area — just enough to anchor the line visually
     var area = Path()
     area.move(to: CGPoint(x: pts[0].x, y: size.height))
     pts.forEach { area.addLine(to: $0) }
     area.addLine(to: CGPoint(x: pts.last!.x, y: size.height))
     area.closeSubpath()
-    ctx.fill(area, with: .color(color.opacity(inRight ? 0.22 : 0.10)))
+    ctx.fill(area, with: .color(color.opacity(0.07)))
 
-    // Curve line
+    // Sharp line — straight segments make usage spikes clearly visible
     var line = Path()
     line.move(to: pts[0])
     pts.dropFirst().forEach { line.addLine(to: $0) }
-    ctx.stroke(line, with: .color(color.opacity(inRight ? 0.85 : 0.50)), lineWidth: 1.5)
+    ctx.stroke(line, with: .color(color.opacity(0.72)), lineWidth: 1.5)
 
-    // Hover dot
+    // Hover dot — solid, stands out against the line
     if let hv = hovered {
         let x = CGFloat(1.0 - hv.ts.timeIntervalSince(t0) / dt) * size.width
         let y = size.height * (1.0 - CGFloat(hv.pct) / 100.0)

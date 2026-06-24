@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func openSettings() {
         guard let controller = statusBarController else { return }
-        settingsWindowController.show(config: controller.config) { [weak self] config in
+        settingsWindowController.show(config: controller.config, historyStore: controller.historyStore) { [weak self] config in
             guard let self else { return }
             do {
                 if let configURL = self.configURL {

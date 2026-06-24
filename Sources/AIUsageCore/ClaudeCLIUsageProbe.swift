@@ -101,29 +101,58 @@ public struct ClaudeCLIUsageProbe: UsageProbing {
         var session = extractWindow(labels: ["Current session"], text: text)
         var weekly = extractWindow(labels: ["Current week (all models)", "Current week"], text: text)
 
+        // Claude's TUI redraw turns every \r into \n, padding the text with many blank lines.
+        // extractWindow's 14-line window is often too narrow to capture the reset line.
+        // Fall back: scan the whole text for reset descriptions in document order.
+        let resets = allResetDescriptions(in: text)  // ordered: session first, weekly second
+
         // Claude's TUI redraw can overwrite individual label characters in raw PTY output.
         // The /usage screen is stable in ordering: session first, weekly second.
         let orderedPercents = orderedUsagePercents(in: text)
         if session == nil, let first = orderedPercents.first {
-            session = ProviderUsageWindow(percentUsed: first, resetDescription: nil)
+            session = ProviderUsageWindow(percentUsed: first, resetDescription: resets.first)
         }
         if weekly == nil, orderedPercents.count > 1 {
-            weekly = ProviderUsageWindow(percentUsed: orderedPercents[1], resetDescription: nil)
+            // Use second distinct reset description if available, otherwise none
+            let weeklyReset = resets.count > 1 ? resets[1] : nil
+            weekly = ProviderUsageWindow(percentUsed: orderedPercents[1], resetDescription: weeklyReset)
+        }
+
+        // Patch missing reset descriptions if extractWindow found the window but missed the reset line
+        if session != nil, session?.resetDescription == nil, let r = resets.first {
+            session = ProviderUsageWindow(percentUsed: session!.percentUsed, resetDescription: r)
+        }
+        if weekly != nil, weekly?.resetDescription == nil {
+            // Fall back to session reset when both windows share the same reset schedule
+            let weeklyReset = resets.count > 1 ? resets[1] : resets.first
+            if let r = weeklyReset {
+                weekly = ProviderUsageWindow(percentUsed: weekly!.percentUsed, resetDescription: r)
+            }
         }
 
         // 0% usage: section headers visible but no "N% used/left" pattern in output
         let lowerText = text.lowercased()
         if session == nil, lowerText.contains("current session") {
-            session = ProviderUsageWindow(percentUsed: 0, resetDescription: nil)
+            session = ProviderUsageWindow(percentUsed: 0, resetDescription: resets.first)
         }
         if weekly == nil, lowerText.contains("current week") {
-            weekly = ProviderUsageWindow(percentUsed: 0, resetDescription: nil)
+            weekly = ProviderUsageWindow(percentUsed: 0, resetDescription: resets.count > 1 ? resets[1] : resets.first)
         }
 
         guard session != nil || weekly != nil else {
             throw ClaudeUsageError("Could not parse Claude /usage output")
         }
         return ClaudeUsageResult(session: session, weekly: weekly)
+    }
+
+    // Collect all non-empty lines containing "reset" in document order.
+    // In Claude's /usage output: session reset appears before weekly reset.
+    private static func allResetDescriptions(in text: String) -> [String] {
+        var seen = Set<String>()
+        return text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0.localizedCaseInsensitiveContains("reset") }
+            .filter { seen.insert($0).inserted }  // deduplicate TUI redraw repetitions
     }
 
     private static func extractWindow(labels: [String], text: String) -> ProviderUsageWindow? {
@@ -176,7 +205,9 @@ public struct ClaudeCLIUsageProbe: UsageProbing {
     }
 
     private static func normalizeTerminalOutput(_ text: String) -> String {
-        var result = text
+        // Expand cursor-forward sequences before stripping ANSI so visual spaces are preserved.
+        // Claude's TUI uses \x1B[NC to position text, leaving no actual space characters between words.
+        var result = expandCursorForward(text)
         let patterns = [
             #"\x1B\][^\x07]*(?:\x07|\x1B\\)"#,
             #"\x1B\[[0-?]*[ -/]*[@-~]"#,
@@ -186,6 +217,30 @@ public struct ClaudeCLIUsageProbe: UsageProbing {
             result = result.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
         }
         return result.replacingOccurrences(of: "\r", with: "\n")
+    }
+
+    // Replace \x1B[NC (cursor forward N columns) with N space characters.
+    private static func expandCursorForward(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"\x1B\[([0-9]*)C"#) else { return text }
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        guard !matches.isEmpty else { return text }
+        var output = ""
+        var lastEnd = text.startIndex
+        for match in matches {
+            guard let range = Range(match.range, in: text) else { continue }
+            output += text[lastEnd..<range.lowerBound]
+            let n: Int
+            if match.range(at: 1).location != NSNotFound,
+               let nRange = Range(match.range(at: 1), in: text), !nRange.isEmpty {
+                n = Int(text[nRange]) ?? 1
+            } else {
+                n = 1
+            }
+            output += String(repeating: " ", count: n)
+            lastEnd = range.upperBound
+        }
+        output += text[lastEnd...]
+        return output
     }
 
     private static func debugSummary(_ text: String) -> String {

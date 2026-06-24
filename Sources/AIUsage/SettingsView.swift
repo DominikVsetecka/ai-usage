@@ -1,14 +1,21 @@
 import AIUsageCore
 import AppKit
+import Charts
 import SwiftUI
 
 struct SettingsView: View {
     @State private var draft: AppConfig
+    let historyStore: UsageHistoryStore
     let onSave: (AppConfig) -> Void
     let onCancel: () -> Void
 
-    init(config: AppConfig, onSave: @escaping (AppConfig) -> Void, onCancel: @escaping () -> Void) {
+    @State private var selectedTab: SettingsTab = .settings
+
+    enum SettingsTab { case settings, history }
+
+    init(config: AppConfig, historyStore: UsageHistoryStore, onSave: @escaping (AppConfig) -> Void, onCancel: @escaping () -> Void) {
         _draft = State(initialValue: config)
+        self.historyStore = historyStore
         self.onSave = onSave
         self.onCancel = onCancel
     }
@@ -18,6 +25,21 @@ struct SettingsView: View {
             header
             Divider()
 
+            TabView(selection: $selectedTab) {
+                settingsContent
+                    .tabItem { Label("Settings", systemImage: "gearshape") }
+                    .tag(SettingsTab.settings)
+
+                HistoryView(historyStore: historyStore, config: draft)
+                    .tabItem { Label("History", systemImage: "chart.line.uptrend.xyaxis") }
+                    .tag(SettingsTab.history)
+            }
+        }
+        .frame(minWidth: 560, minHeight: 660)
+    }
+
+    private var settingsContent: some View {
+        VStack(spacing: 0) {
             Form {
                 Section("General") {
                     Picker("Refresh interval", selection: $draft.refreshIntervalSeconds) {
@@ -77,7 +99,6 @@ struct SettingsView: View {
             }
             .padding(16)
         }
-        .frame(minWidth: 540, minHeight: 620)
     }
 
     private var header: some View {
@@ -480,4 +501,162 @@ private struct ProviderSettingsSection: View {
         )
     }
 
+}
+
+// MARK: - History tab
+
+private struct HistoryView: View {
+    let historyStore: UsageHistoryStore
+    let config: AppConfig
+
+    @State private var days: Int = 1
+    @State private var entries: [UsageHistoryEntry] = []
+    @State private var isLoading = false
+
+    private var enabledSources: [SourceConfig] { config.sources.filter(\.enabled) }
+
+    private struct ChartPoint: Identifiable {
+        let id = UUID()
+        let ts: Date
+        let series: String
+        let pct: Int
+        let isWeek: Bool
+    }
+
+    private var chartPoints: [ChartPoint] {
+        entries.flatMap { entry in
+            enabledSources.flatMap { source -> [ChartPoint] in
+                guard let w = entry.sources[source.id] else { return [] }
+                var pts: [ChartPoint] = []
+                if let v = w.fiveHour { pts.append(.init(ts: entry.ts, series: "\(source.label) 5h", pct: v, isWeek: false)) }
+                if let v = w.oneWeek  { pts.append(.init(ts: entry.ts, series: "\(source.label) 1w", pct: v, isWeek: true)) }
+                return pts
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Usage over time")
+                    .font(.headline)
+                Spacer()
+                Picker("", selection: $days) {
+                    Text("24 h").tag(1)
+                    Text("7 days").tag(7)
+                    Text("30 days").tag(30)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 200)
+            }
+
+            if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 200)
+            } else if chartPoints.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.secondary)
+                    Text("No history yet")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                    Text("Usage is recorded on ≥1% change or every 30 minutes.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, minHeight: 200)
+            } else {
+                Chart(chartPoints) { pt in
+                    LineMark(
+                        x: .value("Time", pt.ts),
+                        y: .value("%", pt.pct)
+                    )
+                    .foregroundStyle(by: .value("Series", pt.series))
+                    .lineStyle(pt.isWeek
+                        ? StrokeStyle(lineWidth: 1.5, dash: [5, 3])
+                        : StrokeStyle(lineWidth: 2))
+                    .interpolationMethod(.monotone)
+                }
+                .chartYScale(domain: 0...100)
+                .chartYAxis {
+                    AxisMarks(values: [0, 25, 50, 75, 100]) { value in
+                        AxisGridLine()
+                        AxisValueLabel { Text("\(value.as(Int.self) ?? 0)%").font(.caption2) }
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 6)) {
+                        AxisGridLine()
+                        AxisValueLabel(
+                            format: days <= 1
+                                ? .dateTime.hour().minute()
+                                : .dateTime.day().month()
+                        )
+                    }
+                }
+                .chartLegend(position: .bottom, alignment: .leading, spacing: 12)
+                .frame(height: 220)
+
+                Divider()
+
+                recentTable
+            }
+        }
+        .padding(20)
+        .task(id: days) {
+            isLoading = true
+            entries = await historyStore.load(days: days)
+            isLoading = false
+        }
+    }
+
+    private var recentTable: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Recent entries")
+                .font(.subheadline.weight(.medium))
+
+            // Column header
+            HStack(spacing: 0) {
+                Text("Time")
+                    .frame(width: 150, alignment: .leading)
+                ForEach(enabledSources, id: \.id) { src in
+                    Text("\(src.label) 5h")
+                        .frame(width: 72, alignment: .trailing)
+                    Text("\(src.label) 1w")
+                        .frame(width: 72, alignment: .trailing)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.bottom, 2)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(entries.suffix(50).reversed().enumerated()), id: \.offset) { _, entry in
+                        HStack(spacing: 0) {
+                            Text(entry.ts, format: .dateTime.day().month().hour().minute().second())
+                                .frame(width: 150, alignment: .leading)
+                                .foregroundStyle(.secondary)
+                            ForEach(enabledSources, id: \.id) { src in
+                                let w = entry.sources[src.id]
+                                Text(w?.fiveHour.map { "\($0)%" } ?? "—")
+                                    .frame(width: 72, alignment: .trailing)
+                                Text(w?.oneWeek.map  { "\($0)%" } ?? "—")
+                                    .frame(width: 72, alignment: .trailing)
+                            }
+                        }
+                        .font(.caption.monospacedDigit())
+                        .padding(.vertical, 3)
+                        Divider()
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+        }
+    }
 }
