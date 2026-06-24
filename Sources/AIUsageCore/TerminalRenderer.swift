@@ -22,6 +22,7 @@ struct TerminalRenderer {
         let delegate = HeadlessDelegate()
         let options = TerminalOptions(cols: cols, rows: rows, convertEol: true)
         let terminal = Terminal(delegate: delegate, options: options)
+        terminal.silentLog = true  // suppress "Info: Unhandled DECSET…" for unknown escape sequences
         terminal.feed(text: raw)
         return extractText(from: terminal)
     }
