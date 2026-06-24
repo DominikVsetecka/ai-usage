@@ -13,9 +13,15 @@ let package = Package(
         .executable(name: "AIUsageSnapshot", targets: ["AIUsageSnapshot"]),
         .library(name: "AIUsageCore", targets: ["AIUsageCore"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.12.0")
+    ],
     targets: [
         .target(
-            name: "AIUsageCore"
+            name: "AIUsageCore",
+            dependencies: [
+                .product(name: "SwiftTerm", package: "SwiftTerm")
+            ]
         ),
         .executableTarget(
             name: "AIUsage",

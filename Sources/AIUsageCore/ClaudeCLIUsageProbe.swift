@@ -1,4 +1,5 @@
 import Foundation
+import SwiftTerm
 
 public struct ClaudeCLIUsageProbe: UsageProbing {
     public let sourceID: String
@@ -87,8 +88,10 @@ public struct ClaudeCLIUsageProbe: UsageProbing {
         }
     }
 
+    private static let renderer = TerminalRenderer()
+
     public static func parse(_ raw: String) throws -> ClaudeUsageResult {
-        let text = normalizeTerminalOutput(raw)
+        let text = renderer.render(raw)
         let lower = text.lowercased()
 
         if lower.contains("not logged in") || lower.contains("please log in") || lower.contains("login required") {
@@ -204,47 +207,8 @@ public struct ClaudeCLIUsageProbe: UsageProbing {
         return Int(line[valueRange])
     }
 
-    private static func normalizeTerminalOutput(_ text: String) -> String {
-        // Expand cursor-forward sequences before stripping ANSI so visual spaces are preserved.
-        // Claude's TUI uses \x1B[NC to position text, leaving no actual space characters between words.
-        var result = expandCursorForward(text)
-        let patterns = [
-            #"\x1B\][^\x07]*(?:\x07|\x1B\\)"#,
-            #"\x1B\[[0-?]*[ -/]*[@-~]"#,
-            #"\x1B[()][AB012]"#
-        ]
-        for pattern in patterns {
-            result = result.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-        }
-        return result.replacingOccurrences(of: "\r", with: "\n")
-    }
-
-    // Replace \x1B[NC (cursor forward N columns) with N space characters.
-    private static func expandCursorForward(_ text: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: #"\x1B\[([0-9]*)C"#) else { return text }
-        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
-        guard !matches.isEmpty else { return text }
-        var output = ""
-        var lastEnd = text.startIndex
-        for match in matches {
-            guard let range = Range(match.range, in: text) else { continue }
-            output += text[lastEnd..<range.lowerBound]
-            let n: Int
-            if match.range(at: 1).location != NSNotFound,
-               let nRange = Range(match.range(at: 1), in: text), !nRange.isEmpty {
-                n = Int(text[nRange]) ?? 1
-            } else {
-                n = 1
-            }
-            output += String(repeating: " ", count: n)
-            lastEnd = range.upperBound
-        }
-        output += text[lastEnd...]
-        return output
-    }
-
     private static func debugSummary(_ text: String) -> String {
-        let normalized = normalizeTerminalOutput(text)
+        let normalized = renderer.render(text)
             .replacingOccurrences(of: "\n", with: " | ")
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
