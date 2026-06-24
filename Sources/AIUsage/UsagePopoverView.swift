@@ -76,8 +76,8 @@ struct UsagePopoverView: View {
                             }
                         }
                     }
+                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxHeight: 520)
             }
             Divider()
