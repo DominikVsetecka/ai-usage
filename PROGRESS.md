@@ -28,6 +28,7 @@ Current feature set:
 - Remaining countdown: optional 100→0% display with colour-coded value (independent of text color mode).
 - Refresh is concurrent and incremental across providers; interval 15 s / 30 s / 1 min / 2 min / 5 min.
 - No cookie scraping, no Full Disk Access, no telemetry.
+- Optional secure Claude profiles are implemented: targeted import from the current Claude Code credential source, per-profile app-owned Keychain storage, direct OAuth usage, automatic refresh-token rotation, 15-minute cache and `Retry-After` handling. The global Claude Code login is never modified.
 
 ## Planned next
 
@@ -58,3 +59,4 @@ Current feature set:
 - `2026-06-24` — Save & Refresh no longer closes the Settings window. Both provider icons changed to template images so they always match the text color.
 - `2026-06-24` — Removed "Emoji / custom" option from Icon Picker (redundant — emoji can be typed directly into Short Label). Cleaned up dead `"emoji"` branch in `iconModeBinding`. ORB-0119 opened: user-provided icon via file picker (Base64 or path in config) to avoid trademark issues with hardcoded brand SVGs.
 - `2026-06-24` — Planned the next architecture in `ORB-0120`–`ORB-0122`: app-owned Keychain profiles without global Claude-login replacement, a two-window usage model, and a SwiftUI/AppKit menu-bar popover showing 5-hour and 1-week quota details for all active checks. Decision captured in `DEC-0005`.
+- `2026-06-24` — Implemented the `ORB-0120` secure-profile foundation and Settings workflow. Unit-style checks cover credential parsing, config secrecy, both usage windows and refresh-token rotation. A live check successfully imported the current Claude Code login into a temporary AI Usage Keychain item, fetched OAuth usage and removed the item afterward. A broad Keychain scan was rejected after it hung; official credential import now probes only the known service (or an explicit override) with a hard three-second timeout.

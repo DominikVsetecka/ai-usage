@@ -118,6 +118,7 @@ public struct SourceConfig: Codable, Equatable, Sendable {
     public var localPath: String?
     public var quota: QuotaSelection?
     public var iconName: String?
+    public var claudeProfile: ClaudeProfile?
 
     public init(
         id: String,
@@ -127,7 +128,8 @@ public struct SourceConfig: Codable, Equatable, Sendable {
         command: CommandConfig?,
         localPath: String? = nil,
         quota: QuotaSelection? = .session,
-        iconName: String? = nil
+        iconName: String? = nil,
+        claudeProfile: ClaudeProfile? = nil
     ) {
         self.id = id
         self.label = label
@@ -137,6 +139,7 @@ public struct SourceConfig: Codable, Equatable, Sendable {
         self.localPath = localPath
         self.quota = quota
         self.iconName = iconName
+        self.claudeProfile = claudeProfile
     }
 }
 
@@ -144,6 +147,7 @@ public enum SourceMode: String, Codable, Equatable, Sendable {
     case fixture
     case command
     case claudeCLI
+    case claudeOAuth
     case codexRPC
 }
 

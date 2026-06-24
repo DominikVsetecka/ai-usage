@@ -106,7 +106,7 @@ public enum UsageProbeFactory {
                     sourceID: source.id,
                     label: source.label,
                     enabled: source.enabled,
-                    percentUsed: fixtureValue(for: source.id)
+                    percentUsed: nil
                 )
             case .command:
                 CommandUsageProbe(
@@ -125,6 +125,14 @@ public enum UsageProbeFactory {
                     configDirectory: source.localPath,
                     quota: source.quota ?? .session
                 )
+            case .claudeOAuth:
+                ClaudeOAuthUsageProbe(
+                    sourceID: source.id,
+                    label: source.label,
+                    enabled: source.enabled,
+                    profile: source.claudeProfile,
+                    quota: source.quota ?? .session
+                )
             case .codexRPC:
                 CodexRPCUsageProbe(
                     sourceID: source.id,
@@ -137,16 +145,4 @@ public enum UsageProbeFactory {
         }
     }
 
-    private static func fixtureValue(for sourceID: String) -> Int? {
-        switch sourceID {
-        case "claude1":
-            43
-        case "claude2":
-            71
-        case "codex":
-            12
-        default:
-            nil
-        }
-    }
 }

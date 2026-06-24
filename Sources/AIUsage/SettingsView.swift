@@ -127,12 +127,21 @@ private struct ProviderSettingsSection: View {
         var isBusy: Bool { if case .testing = self { return true }; return false }
     }
 
-    @State private var testState: TestState = .idle
+    private enum ImportState {
+        case idle, importing, imported(String), failed(String)
+        var isBusy: Bool { if case .importing = self { return true }; return false }
+    }
 
-    private var isClaude: Bool { source.mode == .claudeCLI }
+    @State private var testState: TestState = .idle
+    @State private var importState: ImportState = .idle
+    @State private var confirmsProfileRemoval = false
+
+    private var isClaude: Bool { source.id.hasPrefix("claude") }
+    private var usesClaudeProfile: Bool { source.mode == .claudeOAuth }
     private var isCodex: Bool { source.mode == .codexRPC }
 
     private var canTest: Bool {
+        if usesClaudeProfile { return source.claudeProfile != nil }
         guard let cmd = source.command else { return false }
         return !cmd.executable.trimmingCharacters(in: .whitespaces).isEmpty
     }
@@ -175,18 +184,32 @@ private struct ProviderSettingsSection: View {
             .pickerStyle(.segmented)
             .disabled(!source.enabled)
 
-            TextField(isClaude ? "Claude CLI path" : "Codex CLI path", text: executableBinding)
-                .textFieldStyle(.roundedBorder)
-                .disabled(!source.enabled)
-
             if isClaude {
-                TextField("CLAUDE_CONFIG_DIR (empty = default account)", text: localPathBinding)
+                Picker("Connection", selection: claudeConnectionBinding) {
+                    Text("Secure profile").tag(SourceMode.claudeOAuth)
+                    Text("Claude CLI").tag(SourceMode.claudeCLI)
+                }
+                .pickerStyle(.segmented)
+
+                if usesClaudeProfile {
+                    claudeProfileControls
+                } else {
+                    TextField("Claude CLI path", text: executableBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!source.enabled)
+
+                    TextField("CLAUDE_CONFIG_DIR (empty = default account)", text: localPathBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!source.enabled)
+                }
+            } else {
+                TextField("Codex CLI path", text: executableBinding)
                     .textFieldStyle(.roundedBorder)
                     .disabled(!source.enabled)
             }
 
             LabeledContent("Fetch method") {
-                Text(isCodex ? "RPC · codex app-server" : "CLI · claude /usage")
+                Text(fetchMethodDescription)
                     .foregroundStyle(.secondary)
             }
 
@@ -216,12 +239,84 @@ private struct ProviderSettingsSection: View {
             Label(providerName, systemImage: providerIcon)
         } footer: {
             if isClaude {
-                Text("Use a separate CLAUDE_CONFIG_DIR for a second subscription. The OAuth setup-token environment variable is excluded from the probe.")
+                if usesClaudeProfile {
+                    Text("Credentials are copied into a separate AI Usage Keychain item. Importing never changes the account used by Claude Code, VS Code or Zed.")
+                } else {
+                    Text("Use a separate CLAUDE_CONFIG_DIR for a second subscription. The OAuth setup-token environment variable is excluded from the probe.")
+                }
             } else {
                 Text("Uses JSON-RPC initialize, initialized, then account/rateLimits/read in read-only mode.")
             }
         }
         .onChange(of: source.command?.executable) { _ in testState = .idle }
+        .onChange(of: source.mode) { _ in testState = .idle }
+        .confirmationDialog(
+            "Remove secure Claude profile?",
+            isPresented: $confirmsProfileRemoval,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Profile", role: .destructive) {
+                removeClaudeProfile()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes only the AI Usage Keychain copy. Your Claude Code login is not changed.")
+        }
+    }
+
+    @ViewBuilder
+    private var claudeProfileControls: some View {
+        if let profile = source.claudeProfile {
+            TextField("Profile name", text: profileNameBinding)
+                .textFieldStyle(.roundedBorder)
+
+            if let accountLabel = profile.accountLabel {
+                LabeledContent("Claude account") {
+                    Text(accountLabel)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            LabeledContent("Profile") {
+                Text("Not imported")
+                    .foregroundStyle(.secondary)
+            }
+        }
+
+        HStack(spacing: 10) {
+            Button {
+                importCurrentClaudeAccount()
+            } label: {
+                HStack(spacing: 6) {
+                    if case .importing = importState {
+                        ProgressView().controlSize(.mini)
+                    }
+                    Text(source.claudeProfile == nil ? "Import Current Claude Account" : "Replace from Current Login")
+                }
+            }
+            .disabled(importState.isBusy)
+
+            if source.claudeProfile != nil {
+                Button("Remove", role: .destructive) {
+                    confirmsProfileRemoval = true
+                }
+                .disabled(importState.isBusy)
+            }
+
+            switch importState {
+            case .imported(let source):
+                Label(source, systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.callout)
+            case .failed(let message):
+                Label(message, systemImage: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+                    .font(.callout)
+                    .lineLimit(2)
+            default:
+                EmptyView()
+            }
+        }
     }
 
     private func runTest() {
@@ -234,7 +329,9 @@ private struct ProviderSettingsSection: View {
                 mode: source.mode,
                 command: source.command,
                 localPath: source.localPath,
-                quota: source.quota
+                quota: source.quota,
+                iconName: source.iconName,
+                claudeProfile: source.claudeProfile
             )
             let probes = UsageProbeFactory.makeProbes(config: AppConfig(
                 refreshIntervalSeconds: 30,
@@ -254,6 +351,47 @@ private struct ProviderSettingsSection: View {
         }
     }
 
+    private func importCurrentClaudeAccount() {
+        importState = .importing
+        let existingID = source.claudeProfile?.id
+        let preferredName = source.claudeProfile?.name ?? providerName
+
+        Task {
+            do {
+                let imported = try await Task.detached(priority: .userInitiated) {
+                    try ClaudeCodeCredentialImporter().importCurrentAccount(
+                        profileID: existingID,
+                        preferredName: preferredName
+                    )
+                }.value
+                source.claudeProfile = imported.profile
+                source.mode = .claudeOAuth
+                source.localPath = nil
+                importState = .imported(imported.credentialSourceDescription)
+                testState = .idle
+            } catch {
+                importState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func removeClaudeProfile() {
+        guard let profileID = source.claudeProfile?.id else { return }
+        importState = .importing
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try KeychainClaudeCredentialStore().delete(profileID: profileID)
+                }.value
+                source.claudeProfile = nil
+                testState = .idle
+                importState = .idle
+            } catch {
+                importState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
     private var providerName: String {
         switch source.id {
         case "claude1": "Claude Subscription 1"
@@ -265,6 +403,30 @@ private struct ProviderSettingsSection: View {
 
     private var providerIcon: String {
         isCodex ? "chevron.left.forwardslash.chevron.right" : "terminal"
+    }
+
+    private var fetchMethodDescription: String {
+        if isCodex { return "RPC · codex app-server" }
+        if usesClaudeProfile { return "OAuth · Anthropic usage" }
+        return "CLI · claude /usage"
+    }
+
+    private var claudeConnectionBinding: Binding<SourceMode> {
+        Binding(
+            get: { usesClaudeProfile ? .claudeOAuth : .claudeCLI },
+            set: { source.mode = $0 }
+        )
+    }
+
+    private var profileNameBinding: Binding<String> {
+        Binding(
+            get: { source.claudeProfile?.name ?? "" },
+            set: { value in
+                guard var profile = source.claudeProfile else { return }
+                profile.name = value
+                source.claudeProfile = profile
+            }
+        )
     }
 
     private var quotaBinding: Binding<QuotaSelection> {

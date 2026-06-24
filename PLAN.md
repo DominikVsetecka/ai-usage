@@ -30,6 +30,8 @@ The menu-bar title remains intentionally small and continues to show one user-se
 
 ## Phase 0 — credential and endpoint spike (`ORB-0120`)
 
+Implementation status: complete for the currently authenticated account. The direct endpoint, temporary Keychain import and cleanup passed a live check; second-account and naturally expired-token verification remain operational acceptance work.
+
 Before UI work, validate the complete lifecycle against the two real accounts:
 
 1. Detect Claude Code credentials from the supported local sources: `~/.claude/.credentials.json`, the legacy `Claude Code-credentials` Keychain item and its current hashed variant.
@@ -42,6 +44,8 @@ Before UI work, validate the complete lifecycle against the two real accounts:
 Exit condition: import, usage fetch, refresh and re-login failure are understood and covered by fixtures before the profile UI is considered complete.
 
 ## Phase 1 — secure Claude profiles (`ORB-0120`)
+
+Implementation status: code complete. Settings support import, replace, rename, test, remove and CLI fallback. The credential store and refresh path are covered by deterministic checks.
 
 ### Domain and persistence
 

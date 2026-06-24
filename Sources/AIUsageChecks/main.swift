@@ -1,6 +1,46 @@
 import AIUsageCore
 import Foundation
 
+final class MemoryClaudeCredentialStore: ClaudeCredentialStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [UUID: ClaudeOAuthCredentials] = [:]
+
+    func load(profileID: UUID) throws -> ClaudeOAuthCredentials? {
+        lock.lock()
+        defer { lock.unlock() }
+        return values[profileID]
+    }
+
+    func save(_ credentials: ClaudeOAuthCredentials, profileID: UUID) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        values[profileID] = credentials
+    }
+
+    func delete(profileID: UUID) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        values[profileID] = nil
+    }
+}
+
+actor QueueHTTPTransport: HTTPTransporting {
+    private var responses: [HTTPResult]
+    private(set) var requests: [URLRequest] = []
+
+    init(responses: [HTTPResult]) {
+        self.responses = responses
+    }
+
+    func send(_ request: URLRequest) async throws -> HTTPResult {
+        requests.append(request)
+        guard !responses.isEmpty else {
+            throw ClaudeOAuthUsageError.invalidResponse
+        }
+        return responses.removeFirst()
+    }
+}
+
 @discardableResult
 func check(_ condition: @autoclosure () -> Bool, _ message: String) -> Bool {
     if condition() {
@@ -99,5 +139,80 @@ let rpcResponse: [String: Any] = [
 let codexResult = try CodexRPCClient.parseRateLimitsResponse(rpcResponse)
 check(codexResult.primary?.percentUsed == 25, "Codex RPC parser should read primary percent")
 check(codexResult.secondary?.percentUsed == 40, "Codex RPC parser should read secondary percent")
+
+let credentialFixture = Data(#"{"claudeAiOauth":{"accessToken":"fixture-access","refreshToken":"fixture-refresh","expiresAt":1900000000000,"subscriptionType":"pro","scopes":["user:profile"]}}"#.utf8)
+let parsedCredentials = try ClaudeCodeCredentialImporter.parseCredentials(credentialFixture)
+check(parsedCredentials.accessToken == "fixture-access", "Claude credential parser should read access token")
+check(parsedCredentials.refreshToken == "fixture-refresh", "Claude credential parser should read refresh token")
+check(parsedCredentials.expiresAtMilliseconds == 1_900_000_000_000, "Claude credential parser should read expiry")
+
+let profile = ClaudeProfile(
+    id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+    name: "Example Profile",
+    accountLabel: "account@example.invalid"
+)
+let profileSource = SourceConfig(
+    id: "claude-example",
+    label: "CX",
+    enabled: true,
+    mode: .claudeOAuth,
+    command: nil,
+    quota: .session,
+    claudeProfile: profile
+)
+let profileConfig = AppConfig(refreshIntervalSeconds: 30, sources: [profileSource])
+let encodedProfileConfig = try JSONEncoder().encode(profileConfig)
+let encodedProfileText = String(decoding: encodedProfileConfig, as: UTF8.self)
+check(encodedProfileText.contains("Example Profile"), "profile metadata should persist in config")
+check(!encodedProfileText.contains("fixture-access"), "OAuth access token must never persist in config")
+check(!encodedProfileText.contains("fixture-refresh"), "OAuth refresh token must never persist in config")
+
+let oauthUsageFixture = Data(#"{"five_hour":{"utilization":22.4,"resets_at":"2030-03-17T12:30:00.000Z"},"seven_day":{"utilization":61.1,"resets_at":"2030-03-20T18:45:00Z"}}"#.utf8)
+let oauthUsage = try ClaudeOAuthUsageService.parseUsageResponse(oauthUsageFixture)
+check(oauthUsage.session?.percentUsed == 22, "Claude OAuth parser should read five-hour usage")
+check(oauthUsage.weekly?.percentUsed == 61, "Claude OAuth parser should read weekly usage")
+
+let refreshProfileID = UUID()
+let memoryStore = MemoryClaudeCredentialStore()
+try memoryStore.save(
+    ClaudeOAuthCredentials(
+        accessToken: "expired-fixture-access",
+        refreshToken: "fixture-refresh-one",
+        expiresAtMilliseconds: 0
+    ),
+    profileID: refreshProfileID
+)
+let refreshResponse = HTTPResult(
+    data: Data(#"{"access_token":"fresh-fixture-access","refresh_token":"fixture-refresh-two","expires_in":3600}"#.utf8),
+    statusCode: 200
+)
+let usageResponse = HTTPResult(data: oauthUsageFixture, statusCode: 200)
+let queueTransport = QueueHTTPTransport(responses: [refreshResponse, usageResponse])
+let refreshService = ClaudeOAuthUsageService(
+    store: memoryStore,
+    transport: queueTransport,
+    cacheTTL: 0
+)
+let refreshedUsage = try await refreshService.fetch(profileID: refreshProfileID, force: true)
+check(refreshedUsage.session?.percentUsed == 22, "refreshed OAuth credentials should fetch usage")
+let rotatedCredentials = try memoryStore.load(profileID: refreshProfileID)
+check(rotatedCredentials?.accessToken == "fresh-fixture-access", "refreshed access token should persist in credential store")
+check(rotatedCredentials?.refreshToken == "fixture-refresh-two", "rotated refresh token should persist in credential store")
+let recordedRequests = await queueTransport.requests
+check(recordedRequests.count == 2, "expired credentials should refresh once before usage request")
+
+if ProcessInfo.processInfo.environment["AI_USAGE_LIVE_CLAUDE_OAUTH_CHECK"] == "1" {
+    let liveProfileID = UUID()
+    let liveStore = KeychainClaudeCredentialStore()
+    defer { try? liveStore.delete(profileID: liveProfileID) }
+    _ = try ClaudeCodeCredentialImporter(store: liveStore).importCurrentAccount(
+        profileID: liveProfileID,
+        preferredName: "Temporary Live Check"
+    )
+    let liveService = ClaudeOAuthUsageService(store: liveStore, cacheTTL: 0)
+    let liveUsage = try await liveService.fetch(profileID: liveProfileID, force: true)
+    check(liveUsage.session != nil || liveUsage.weekly != nil, "live Claude OAuth check should return usage")
+    print("Live Claude OAuth check passed")
+}
 
 print("AIUsageChecks passed")

@@ -10,7 +10,7 @@
 
 ## Current focus
 
-1. `ORB-0120` — validate and implement secure Claude account import into per-profile macOS Keychain items. Prove token refresh and rate-limit behaviour before replacing the current CLI path.
+1. `ORB-0120` — implementation and one-account live OAuth verification complete. Remaining acceptance: import and sustain both real Claude accounts through token refresh/re-login scenarios.
 2. `ORB-0121` — refactor snapshots and probes so one fetch preserves both 5-hour/session and 1-week windows, with independent reset and stale state.
 3. `ORB-0122` — replace the plain click menu with a compact native popover showing both windows for every enabled check.
 

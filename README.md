@@ -12,8 +12,9 @@ The app is functional for local use:
 - Codex usage is read through the local read-only `codex app-server` JSON-RPC interface.
 - Values refresh concurrently and remain visible when a provider temporarily fails.
 - Settings, remaining-quota mode, provider icons and connection checks are implemented.
+- Claude sources can optionally import the current Claude Code account into a separate app-owned macOS Keychain profile and fetch usage directly.
 
-Secure Keychain-backed Claude profiles and a click popover with both 5-hour and 1-week windows are planned next. See `PLAN.md` and `ROADMAP.md`.
+A click popover with both 5-hour and 1-week windows is planned next. See `PLAN.md` and `ROADMAP.md`.
 
 ## Goal
 
@@ -138,6 +139,7 @@ Each provider has its own settings:
 - session or weekly quota
 - CLI binary path
 - Claude only: `CLAUDE_CONFIG_DIR` for a separate account
+- Claude only: CLI or secure Keychain profile connection
 
 General settings include `Remaining countdown (100% to 0%)`:
 
@@ -179,4 +181,19 @@ CLAUDE_CONFIG_DIR=~/.claude-account-2 claude auth login
 
 Then enable Claude Subscription 2 in Settings and use `~/.claude-account-2` as its `CLAUDE_CONFIG_DIR`.
 
-In the current implementation, no browser cookies, OAuth token files, or Full Disk Access are used by the app. Claude CLI credentials and Codex RPC authentication remain owned by the official CLIs. The planned profile mode stores imported Claude OAuth secrets only in app-owned Keychain items.
+No browser cookies, repository-local OAuth token files or Full Disk Access are used. In CLI mode, credentials remain owned by the official tools. In secure-profile mode, imported Claude OAuth secrets exist only in app-owned Keychain items.
+
+### Secure Claude profiles
+
+The optional secure-profile mode removes the need to maintain multiple `CLAUDE_CONFIG_DIR` folders:
+
+1. Log Claude Code into the first account using the official CLI.
+2. Open AI Usage Settings for Claude 1, select `Secure profile`, then choose `Import Current Claude Account`.
+3. Save the settings.
+4. Log Claude Code into the second account.
+5. Repeat the import under Claude 2, then save again.
+6. Restore Claude Code to whichever account you want to use interactively.
+
+AI Usage copies only the OAuth fields required for quota and refresh into separate Keychain items. Importing, refreshing, replacing or removing an AI Usage profile never writes to Claude Code's Keychain item or `~/.claude.json`.
+
+The direct OAuth usage endpoint is not a documented public Anthropic API and may change. AI Usage therefore keeps the Claude CLI mode available as a fallback, caches successful direct responses for 15 minutes and honours provider rate limits.
