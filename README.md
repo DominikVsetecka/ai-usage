@@ -43,10 +43,11 @@ swift run AIUsageSnapshot
 - **Menu bar** — one value per enabled provider; configurable font size, weight, and color mode (white / dimmed / usage gradient)
 - **Popover** — 5-hour and 1-week quota windows per provider with integrated burn-rate sparkline, percentage, and reset countdown ("Resets in 2 hr 15 min")
 - **Reset marker** — dot + vertical line in the sparkline marks where the last quota reset occurred
+- **Sparkline direction** — ascending (usage rises, default) or descending (quota drops from top)
 - **Local history** — usage logged to `~/.ai-usage/history/YYYY-MM-DD.jsonl` on ≥1% change or every 30 min; 30-day retention
 - **History tab** — line chart with 1-day / 7-day / 30-day picker; "Show in Finder" button opens the history folder
 - **Secure Claude profiles** — OAuth credentials imported into a separate app-owned Keychain entry; never touches Claude Code's own login
-- **Custom icons** — pick any SVG or PNG per provider via file picker; stored as Base64 in `config.json`
+- **Custom icons** — pick any SVG or PNG per provider via file picker; stored as Base64 in `config.json`; no brand logos are bundled
 - **Configurable refresh** — 15 s / 30 s / 1 min / 2 min / 5 min
 
 ## Configuration
@@ -60,6 +61,9 @@ History is stored at `~/.ai-usage/history/` and is not committed to git.
 **Recommended: Secure profile mode**
 
 Each account gets its own isolated Keychain entry. After setup the `claude` CLI is no longer needed for those sources.
+
+> **Why does it access the Keychain?**
+> Secure profile mode imports the OAuth token that Claude Code already stored on your Mac — it reads from the existing Keychain item once, copies it into a *separate, app-owned* entry under the service name `ai-usage`, and never touches the original again. This lets AI Usage authenticate directly to the Claude API without keeping the CLI running. You can verify this in Keychain Access.app by searching for "ai-usage". No credentials are written to disk or transmitted anywhere other than the Anthropic API.
 
 1. Make sure Claude Code CLI is logged in with your **first** account.
 2. Settings → Claude 1 → Connection: **Secure profile** → "Import Current Claude Account" → Save & Refresh.
@@ -89,7 +93,9 @@ Enable Claude 2 in Settings, set Connection to **Claude CLI**, and set `CLAUDE_C
 
 - No telemetry, no analytics, no network requests beyond the CLIs you configure
 - All data stays locally under `~/.ai-usage/`
-- History files are gitignored; no account data is committed
+- History files and `config.json` live in `~/.ai-usage/` — never inside the app bundle or repo
+- In secure profile mode, credentials are stored in app-owned macOS Keychain entries (service: `ai-usage`); the original Claude Code Keychain item is never modified
+- No account data, tokens, or personal information is committed to this repository
 
 ## License
 

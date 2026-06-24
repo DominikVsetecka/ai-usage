@@ -3,12 +3,8 @@
 ## Orbit refs
 
 - Project: `ai-usage`
-- Active tickets: `ORB-0120`
-- Completed: `ORB-0119`
-- Completed: `ORB-0113`–`ORB-0118`, `ORB-0119`, `ORB-0121`, `ORB-0122`, `ORB-0123`
-- Triage / later: `ORB-0119`
+- Completed: `ORB-0113`–`ORB-0123`
 - Decisions: `DEC-0005`
-- Done: `ORB-0113`–`ORB-0118`, `ORB-0121`, `ORB-0122`, `ORB-0123`
 
 ## Stand
 
@@ -21,7 +17,7 @@ Current feature set:
 - PTY completion detection exits as soon as the usage screen settles (~5.5 s), not after the 20 s hard timeout.
 - 0% usage edge case handled: section headers present but no "N% used/left" text → returns 0% instead of parse error.
 - Stale-value preservation: on a failed fetch the last successful percentage is kept in the menu bar (dimmed); `--` only appears before the very first successful fetch.
-- Provider icons: Claude and OpenAI SVG logos rendered via `NSTextAttachment`; both are template images tinted with the current text color. Falls back to text label if `NSImage(data:)` cannot parse the SVG.
+- Custom provider icons: per-source SVG/PNG file picker (NSOpenPanel); stored as Base64 in `SourceConfig.iconData`; no built-in brand logos bundled.
 - Text color mode: White (default) · Dimmed · Usage gradient (green 0% → red 100%).
 - Icon, label, quota, binary path, CLAUDE_CONFIG_DIR all editable per source in Settings.
 - Font size (System / 11–16 pt) and font weight (Light / Regular / Medium / Semibold / Bold) configurable globally.
@@ -40,7 +36,7 @@ Current feature set:
 
 ## Planned next
 
-- Secure Claude account profiles (ORB-0120): import Claude Code OAuth credentials per profile into app-owned Keychain; direct OAuth usage without CLI PTY.
+- No open tickets. App is feature-complete for v1.0 public release.
 
 ## Verification
 
@@ -77,3 +73,9 @@ Current feature set:
 - `2026-06-24` — Info-Tab in Settings: App-Name, Version, "by Dominik Vsetecka", GitHub-Link, Requirements-Übersicht (claude CLI, codex CLI).
 - `2026-06-24` — History-Tab: "Show in Finder"-Button öffnet `~/.ai-usage/history/` direkt im Finder; `UsageHistoryStore.directory` als `public nonisolated let` exponiert.
 - `2026-06-24` — README für öffentliches GitHub-Repo geschrieben: Requirements, Build & Run, Feature-Liste, Config-Anleitung, Privacy-Note.
+- `2026-06-24` — (ORB-0120) Two-account setup erfolgreich mit Secure Profile (Option B) getestet. ORB-0120 abgeschlossen.
+- `2026-06-24` — Sparkline-Direction-Setting (ascending/descending) hinzugefügt; bars-Option war nicht funktionsfähig und wieder entfernt. Nur SparklineDirection enum verbleibt.
+- `2026-06-24` — Test-Connection-Ergebnis von "xx% OK" auf "xx% left · OK" geändert.
+- `2026-06-25` — Popover-Positionierung gefixt: NSWindow-frame nach show() direkt um -60pt versetzt; darkAqua-Appearance auf NSPopover gesetzt (Flash-to-light bei zweitem Öffnen behoben).
+- `2026-06-25` — Settings-Fenster auf 740×720pt vergrößert, resizable, minSize 560×660 gesetzt (History-Tab war abgeschnitten).
+- `2026-06-25` — Privacy-Check: keine privaten Daten (Tokens, E-Mail-Adressen, Keychain-Inhalte) in tracked files. `~/.ai-usage/config.json` liegt außerhalb des Repos.
