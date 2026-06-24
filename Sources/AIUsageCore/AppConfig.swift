@@ -6,6 +6,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var menuBarFontSize: CGFloat?
     public var menuBarFontWeight: String?
     public var textColorMode: TextColorMode?
+    public var sparklineStyle: SparklineStyle?
+    public var sparklineDirection: SparklineDirection?
     public var sources: [SourceConfig]
 
     public init(
@@ -14,6 +16,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
         menuBarFontSize: CGFloat? = nil,
         menuBarFontWeight: String? = nil,
         textColorMode: TextColorMode? = nil,
+        sparklineStyle: SparklineStyle? = nil,
+        sparklineDirection: SparklineDirection? = nil,
         sources: [SourceConfig]
     ) {
         self.refreshIntervalSeconds = max(5, refreshIntervalSeconds)
@@ -21,6 +25,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.menuBarFontSize = menuBarFontSize
         self.menuBarFontWeight = menuBarFontWeight
         self.textColorMode = textColorMode
+        self.sparklineStyle = sparklineStyle
+        self.sparklineDirection = sparklineDirection
         self.sources = sources
     }
 
@@ -158,6 +164,16 @@ public enum TextColorMode: String, Codable, Equatable, CaseIterable, Sendable {
     case primary            // immer .labelColor (weiß/schwarz je nach Mode)
     case secondary          // immer .secondaryLabelColor (abgetöntes weiß)
     case percentageGradient // grün (0% verbraucht) → rot (100% verbraucht)
+}
+
+public enum SparklineStyle: String, Codable, Equatable, CaseIterable, Sendable {
+    case line   // smooth connected line (default)
+    case bars   // vertical bar per data point
+}
+
+public enum SparklineDirection: String, Codable, Equatable, CaseIterable, Sendable {
+    case ascending   // 0% at bottom, rises with usage (default)
+    case descending  // 0% at top, drops as quota is consumed
 }
 
 public enum QuotaSelection: String, Codable, Equatable, CaseIterable, Sendable {
