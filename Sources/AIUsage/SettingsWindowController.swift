@@ -18,12 +18,12 @@ final class SettingsWindowController: NSWindowController {
 
         if window == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 740, height: 720),
+                contentRect: NSRect(x: 0, y: 0, width: 820, height: 720),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
-            window.minSize = NSSize(width: 560, height: 660)
+            window.minSize = NSSize(width: 660, height: 660)
             window.title = "AI Usage Settings"
             window.isReleasedWhenClosed = false
             window.center()

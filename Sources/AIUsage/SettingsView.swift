@@ -40,7 +40,7 @@ struct SettingsView: View {
                     .tag(SettingsTab.info)
             }
         }
-        .frame(minWidth: 560, minHeight: 660)
+        .frame(minWidth: 660, minHeight: 660)
     }
 
     private var settingsContent: some View {
