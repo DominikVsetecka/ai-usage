@@ -1,0 +1,46 @@
+{
+  "refreshIntervalSeconds": 30,
+  "remainingCountdownEnabled": false,
+  "sources": [
+    {
+      "id": "claude1",
+      "label": "C1",
+      "enabled": true,
+      "mode": "claudeCLI",
+      "quota": "session",
+      "command": {
+        "executable": "/opt/homebrew/bin/claude",
+        "arguments": [],
+        "environment": {},
+        "timeoutSeconds": 20
+      }
+    },
+    {
+      "id": "claude2",
+      "label": "C2",
+      "enabled": false,
+      "mode": "claudeCLI",
+      "localPath": "~/.claude-account-2",
+      "quota": "session",
+      "command": {
+        "executable": "/opt/homebrew/bin/claude",
+        "arguments": [],
+        "environment": {},
+        "timeoutSeconds": 20
+      }
+    },
+    {
+      "id": "codex",
+      "label": "GPT",
+      "enabled": true,
+      "mode": "codexRPC",
+      "quota": "session",
+      "command": {
+        "executable": "/opt/homebrew/bin/codex",
+        "arguments": [],
+        "environment": {},
+        "timeoutSeconds": 15
+      }
+    }
+  ]
+}
