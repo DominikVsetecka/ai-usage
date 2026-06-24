@@ -8,6 +8,12 @@ C1 43%  GPT 12%
 
 Click the menu bar item to open a popover with per-provider details, burn-rate sparklines, and reset countdowns.
 
+<div align="center">
+  <img src="ai-usage-1.png" width="320" alt="Menu bar popover">
+  <img src="ai-usage-2.png" width="320" alt="Settings">
+  <img src="ai-usage-3.png" width="320" alt="History">
+</div>
+
 ## Requirements
 
 - macOS 13 Ventura or later
