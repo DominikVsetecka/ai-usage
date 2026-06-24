@@ -174,14 +174,16 @@ private struct ProviderDetailSection: View {
                 window: snapshot.fiveHour,
                 isStale: isStale,
                 remainingCountdown: config.showsRemainingCountdown,
-                burnPoints: fiveHourBurn
+                burnPoints: fiveHourBurn,
+                windowDuration: 5 * 3600
             )
             WindowRow(
                 title: "1-week",
                 window: snapshot.oneWeek,
                 isStale: isStale,
                 remainingCountdown: config.showsRemainingCountdown,
-                burnPoints: oneWeekBurn
+                burnPoints: oneWeekBurn,
+                windowDuration: 7 * 24 * 3600
             )
 
             if let error = snapshot.errorMessage, isFailed {
@@ -227,6 +229,7 @@ private struct WindowRow: View {
     let isStale: Bool
     let remainingCountdown: Bool
     let burnPoints: [BurnPoint]
+    let windowDuration: TimeInterval
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -239,12 +242,14 @@ private struct WindowRow: View {
                 if let window {
                     let displayPct = remainingCountdown ? max(0, 100 - window.percentUsed) : window.percentUsed
                     let color = barColor(pct: window.percentUsed)
+                    let resetMarker = window.resetsAt.map { $0.addingTimeInterval(-windowDuration) }
 
                     BurnBarView(
                         burnPoints: burnPoints,
                         currentPct: window.percentUsed,
                         remainingCountdown: remainingCountdown,
-                        color: color
+                        color: color,
+                        resetMarkerDate: resetMarker
                     )
 
                     Text("\(displayPct)%")
@@ -302,6 +307,7 @@ private struct BurnBarView: View {
     let currentPct: Int
     let remainingCountdown: Bool
     let color: Color
+    var resetMarkerDate: Date? = nil
 
     @State private var hoveredPoint: BurnPoint? = nil
     @State private var hoverX: CGFloat = 0
@@ -337,9 +343,9 @@ private struct BurnBarView: View {
 
                 // Burn sparkline
                 if burnPoints.count >= 2, sparkW > 8 {
-                    let pts = burnPoints, col = color, hv = hoveredPoint
+                    let pts = burnPoints, col = color, hv = hoveredPoint, rm = resetMarkerDate
                     Canvas { ctx, size in
-                        drawCurve(ctx: ctx, size: size, points: pts, color: col, inRight: remainingCountdown, hovered: hv)
+                        drawCurve(ctx: ctx, size: size, points: pts, color: col, inRight: remainingCountdown, hovered: hv, resetMarker: rm)
                     }
                     .frame(width: sparkW, height: H)
                     .offset(x: sparkOffX)
@@ -397,7 +403,8 @@ private struct BurnBarView: View {
 private func drawCurve(
     ctx: GraphicsContext, size: CGSize,
     points: [BurnPoint], color: Color,
-    inRight: Bool, hovered: BurnPoint?
+    inRight: Bool, hovered: BurnPoint?,
+    resetMarker: Date? = nil
 ) {
     guard points.count >= 2 else { return }
     let t0 = points.first!.ts
@@ -435,6 +442,22 @@ private func drawCurve(
         ctx.fill(
             Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
             with: .color(color)
+        )
+    }
+
+    // Reset marker — vertical dashed line where the window reset occurred
+    if let rm = resetMarker, rm >= t0, rm <= points.last!.ts {
+        let x = CGFloat(1.0 - rm.timeIntervalSince(t0) / dt) * size.width
+        var line = Path()
+        line.move(to: CGPoint(x: x, y: 0))
+        line.addLine(to: CGPoint(x: x, y: size.height))
+        ctx.stroke(line, with: .color(color.opacity(0.5)),
+                   style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+        // Small dot at the top
+        let r: CGFloat = 2
+        ctx.fill(
+            Path(ellipseIn: CGRect(x: x - r, y: -r, width: r * 2, height: r * 2)),
+            with: .color(color.opacity(0.7))
         )
     }
 }
