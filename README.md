@@ -78,7 +78,7 @@ macOS Gatekeeper may block the binary on first run. If you see a security warnin
 
 - **Menu bar** — one value per enabled provider; configurable font size, weight, and color mode (white / dimmed / usage gradient)
 - **Popover** — 5-hour and 1-week quota windows per provider with integrated burn-rate sparkline, percentage, and reset countdown ("Resets in 2 hr 15 min")
-- **Reset marker** — dot + vertical line in the sparkline marks where the last quota reset occurred
+- **Window-scoped sparklines** — burn history is cropped to the active 5-hour or 1-week quota window
 - **Sparkline direction** — ascending (usage rises, default) or descending (quota drops from top)
 - **Local history** — usage logged to `~/.ai-usage/history/YYYY-MM-DD.jsonl` on ≥1% change or every 30 min; 30-day retention
 - **History tab** — line chart with 1-day / 7-day / 30-day picker; "Show in Finder" button opens the history folder

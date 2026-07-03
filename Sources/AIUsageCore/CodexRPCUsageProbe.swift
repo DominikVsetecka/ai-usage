@@ -76,17 +76,20 @@ public enum CodexRPCClient {
         let process = Process()
         let input = Pipe()
         let output = Pipe()
+        let error = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["-s", "read-only", "-a", "untrusted", "app-server"]
+        process.currentDirectoryURL = safeWorkingDirectory()
         process.standardInput = input
         process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        process.environment = ProcessInfo.processInfo.environment.merging(command.environment) { _, new in new }
+        process.standardError = error
+        process.environment = processEnvironment(merging: command.environment)
 
         try process.run()
         defer {
             try? input.fileHandleForWriting.close()
             try? output.fileHandleForReading.close()
+            try? error.fileHandleForReading.close()
             if process.isRunning {
                 process.terminate()
                 let deadline = Date().addingTimeInterval(1)
@@ -136,7 +139,9 @@ public enum CodexRPCClient {
                     return message
                 }
                 if !process.isRunning {
-                    throw CodexRPCError("Codex app-server exited unexpectedly")
+                    let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    throw CodexRPCError(stderr?.isEmpty == false ? stderr! : "Codex app-server exited unexpectedly")
                 }
                 usleep(20_000)
             }
@@ -206,6 +211,25 @@ public enum CodexRPCClient {
             guard count > 0 else { break }
             data.append(contentsOf: bytes.prefix(count))
         }
+    }
+
+    private static func safeWorkingDirectory() -> URL {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ai-usage", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private static func processEnvironment(merging custom: [String: String]) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        let fallbackPath = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        if let existing = environment["PATH"], !existing.isEmpty {
+            environment["PATH"] = "\(fallbackPath):\(existing)"
+        } else {
+            environment["PATH"] = fallbackPath
+        }
+        environment.merge(custom) { _, new in new }
+        return environment
     }
 }
 

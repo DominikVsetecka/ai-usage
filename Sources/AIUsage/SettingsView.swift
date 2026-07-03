@@ -542,11 +542,53 @@ private struct HistoryView: View {
     let historyStore: UsageHistoryStore
     let config: AppConfig
 
-    @State private var days: Int = 1
+    @State private var selectedRange: HistoryRange = .rollingDay
     @State private var entries: [UsageHistoryEntry] = []
     @State private var isLoading = false
+    @State private var zoomLevel = 0
+    @State private var xZoomDomain: ClosedRange<Date>?
+    @State private var dragStartX: CGFloat?
+    @State private var dragEndX: CGFloat?
 
     private var enabledSources: [SourceConfig] { config.sources.filter(\.enabled) }
+
+    private enum HistoryRange: String, CaseIterable, Identifiable {
+        case today
+        case rollingDay
+        case week
+        case month
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .today: "Today"
+            case .rollingDay: "24 h"
+            case .week: "7 days"
+            case .month: "30 days"
+            }
+        }
+
+        var usesTimeAxis: Bool {
+            switch self {
+            case .today, .rollingDay: true
+            case .week, .month: false
+            }
+        }
+
+        func domain(now: Date = Date(), calendar: Calendar = .current) -> ClosedRange<Date> {
+            switch self {
+            case .today:
+                return calendar.startOfDay(for: now)...now
+            case .rollingDay:
+                return now.addingTimeInterval(-86_400)...now
+            case .week:
+                return now.addingTimeInterval(-7 * 86_400)...now
+            case .month:
+                return now.addingTimeInterval(-30 * 86_400)...now
+            }
+        }
+    }
 
     private struct ChartPoint: Identifiable {
         let id = UUID()
@@ -568,20 +610,80 @@ private struct HistoryView: View {
         }
     }
 
+    private var chartXDomain: ClosedRange<Date> {
+        if let xZoomDomain { return xZoomDomain }
+        return selectedRange.domain()
+    }
+
+    private var chartYDomain: ClosedRange<Double> {
+        guard zoomLevel > 0, !chartPoints.isEmpty else { return 0...100 }
+        let values = chartPoints.map(\.pct)
+        guard let minValue = values.min(), let maxValue = values.max() else { return 0...100 }
+
+        let margin = zoomLevel == 1 ? 15 : 8
+        var lower = max(0, minValue - margin)
+        var upper = min(100, maxValue + margin)
+
+        if upper - lower < 12 {
+            let center = (upper + lower) / 2
+            lower = max(0, center - 6)
+            upper = min(100, center + 6)
+        }
+        return Double(lower)...Double(upper)
+    }
+
+    private var yAxisValues: [Double] {
+        let domain = chartYDomain
+        if domain.lowerBound == 0, domain.upperBound == 100 {
+            return [0, 25, 50, 75, 100]
+        }
+
+        let step = max(5, ((domain.upperBound - domain.lowerBound) / 4).rounded())
+        let start = (domain.lowerBound / step).rounded(.down) * step
+        return stride(from: start, through: domain.upperBound, by: step)
+            .filter { $0 >= domain.lowerBound && $0 <= domain.upperBound }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Usage over time")
                     .font(.headline)
                 Spacer()
-                Picker("", selection: $days) {
-                    Text("24 h").tag(1)
-                    Text("7 days").tag(7)
-                    Text("30 days").tag(30)
+                Picker("", selection: $selectedRange) {
+                    ForEach(HistoryRange.allCases) { range in
+                        Text(range.label).tag(range)
+                    }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 200)
+                .frame(width: 280)
+                HStack(spacing: 6) {
+                    Button {
+                        xZoomDomain = nil
+                    } label: {
+                        Image(systemName: "arrow.left.and.right")
+                    }
+                    .disabled(xZoomDomain == nil)
+                    .help("Show full time range")
+
+                    Button {
+                        zoomLevel = max(0, zoomLevel - 1)
+                    } label: {
+                        Image(systemName: "minus.magnifyingglass")
+                    }
+                    .disabled(zoomLevel == 0)
+                    .help("Zoom statistics out")
+
+                    Button {
+                        zoomLevel = min(2, zoomLevel + 1)
+                    } label: {
+                        Image(systemName: "plus.magnifyingglass")
+                    }
+                    .disabled(zoomLevel == 2 || chartPoints.isEmpty)
+                    .help("Zoom statistics in")
+                }
+                .buttonStyle(.borderless)
                 Button {
                     NSWorkspace.shared.open(historyStore.directory)
                 } label: {
@@ -619,24 +721,78 @@ private struct HistoryView: View {
                         : StrokeStyle(lineWidth: 2))
                     .interpolationMethod(.monotone)
                 }
-                .chartYScale(domain: 0...100)
+                .chartXScale(domain: chartXDomain)
+                .chartYScale(domain: chartYDomain)
                 .chartYAxis {
-                    AxisMarks(values: [0, 25, 50, 75, 100]) { value in
+                    AxisMarks(values: yAxisValues) { value in
                         AxisGridLine()
-                        AxisValueLabel { Text("\(value.as(Int.self) ?? 0)%").font(.caption2) }
+                        AxisValueLabel { Text("\(Int(value.as(Double.self) ?? 0))%").font(.caption2) }
                     }
                 }
                 .chartXAxis {
                     AxisMarks(values: .automatic(desiredCount: 6)) {
                         AxisGridLine()
                         AxisValueLabel(
-                            format: days <= 1
+                            format: selectedRange.usesTimeAxis
                                 ? .dateTime.hour().minute()
                                 : .dateTime.day().month()
                         )
                     }
                 }
                 .chartLegend(position: .bottom, alignment: .leading, spacing: 12)
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        let plotArea = geometry[proxy.plotAreaFrame]
+                        ZStack(alignment: .topLeading) {
+                            if let dragStartX, let dragEndX {
+                                let lower = min(dragStartX, dragEndX)
+                                let upper = max(dragStartX, dragEndX)
+                                Rectangle()
+                                    .fill(Color.accentColor.opacity(0.16))
+                                    .overlay {
+                                        Rectangle()
+                                            .stroke(Color.accentColor.opacity(0.45), lineWidth: 1)
+                                    }
+                                    .frame(width: max(1, upper - lower), height: plotArea.height)
+                                    .offset(x: plotArea.minX + lower, y: plotArea.minY)
+                            }
+
+                            Rectangle()
+                                .fill(.clear)
+                                .contentShape(Rectangle())
+                                .frame(width: plotArea.width, height: plotArea.height)
+                                .offset(x: plotArea.minX, y: plotArea.minY)
+                                .gesture(
+                                    DragGesture(minimumDistance: 8)
+                                        .onChanged { value in
+                                            let x = min(max(value.location.x - plotArea.minX, 0), plotArea.width)
+                                            if dragStartX == nil {
+                                                dragStartX = min(max(value.startLocation.x - plotArea.minX, 0), plotArea.width)
+                                            }
+                                            dragEndX = x
+                                        }
+                                        .onEnded { _ in
+                                            defer {
+                                                dragStartX = nil
+                                                dragEndX = nil
+                                            }
+                                            guard let dragStartX, let dragEndX,
+                                                  abs(dragEndX - dragStartX) >= 12 else {
+                                                return
+                                            }
+                                            let lowerX = min(dragStartX, dragEndX)
+                                            let upperX = max(dragStartX, dragEndX)
+                                            guard let start: Date = proxy.value(atX: lowerX),
+                                                  let end: Date = proxy.value(atX: upperX),
+                                                  end.timeIntervalSince(start) >= 60 else {
+                                                return
+                                            }
+                                            xZoomDomain = start...end
+                                        }
+                                )
+                        }
+                    }
+                }
                 .frame(height: 220)
 
                 Divider()
@@ -645,9 +801,11 @@ private struct HistoryView: View {
             }
         }
         .padding(20)
-        .task(id: days) {
+        .task(id: selectedRange) {
             isLoading = true
-            entries = await historyStore.load(days: days)
+            xZoomDomain = nil
+            let domain = selectedRange.domain()
+            entries = await historyStore.load(from: domain.lowerBound, to: domain.upperBound)
             isLoading = false
         }
     }

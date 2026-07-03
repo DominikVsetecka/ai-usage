@@ -83,7 +83,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
         let data = try Data(contentsOf: url)
         let decoder = JSONDecoder()
-        return try decoder.decode(AppConfig.self, from: data)
+        return try decoder.decode(AppConfig.self, from: data).normalized()
     }
 
     public func save(to url: URL) throws {
@@ -109,6 +109,25 @@ public struct AppConfig: Codable, Equatable, Sendable {
             .appendingPathComponent(".ai-usage", isDirectory: true)
             .appendingPathComponent("config.json")
             .standardizedFileURL
+    }
+
+    private func normalized() -> AppConfig {
+        var copy = self
+        for index in copy.sources.indices {
+            if copy.sources[index].label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                copy.sources[index].label = Self.defaultLabel(for: copy.sources[index].id)
+            }
+        }
+        return copy
+    }
+
+    private static func defaultLabel(for sourceID: String) -> String {
+        switch sourceID {
+        case "claude1": "C1"
+        case "claude2": "C2"
+        case "codex": "GPT"
+        default: sourceID
+        }
     }
 }
 

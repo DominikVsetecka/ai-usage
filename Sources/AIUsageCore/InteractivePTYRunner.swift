@@ -49,12 +49,12 @@ public struct InteractivePTYRunner: Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
+        process.currentDirectoryURL = Self.safeWorkingDirectory()
         process.standardInput = secondary
         process.standardOutput = secondary
         process.standardError = secondary
 
-        var processEnvironment = ProcessInfo.processInfo.environment
-        processEnvironment.merge(environment) { _, new in new }
+        var processEnvironment = Self.processEnvironment(merging: environment)
         processEnvironment.removeValue(forKey: "CLAUDE_CODE_OAUTH_TOKEN")
         processEnvironment["TERM"] = "xterm-256color"
         processEnvironment["COLORTERM"] = "truecolor"
@@ -126,6 +126,25 @@ public struct InteractivePTYRunner: Sendable {
             output: String(data: output, encoding: .utf8) ?? "",
             exitCode: process.terminationStatus
         )
+    }
+
+    private static func safeWorkingDirectory() -> URL {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ai-usage", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private static func processEnvironment(merging custom: [String: String]) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        let fallbackPath = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        if let existing = environment["PATH"], !existing.isEmpty {
+            environment["PATH"] = "\(fallbackPath):\(existing)"
+        } else {
+            environment["PATH"] = fallbackPath
+        }
+        environment.merge(custom) { _, new in new }
+        return environment
     }
 
     private static func readAvailable(fd: Int32, into data: inout Data) {

@@ -41,7 +41,8 @@ public struct CommandRunner: CommandRunning {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: config.executable)
         process.arguments = config.arguments
-        process.environment = ProcessInfo.processInfo.environment.merging(config.environment) { _, new in new }
+        process.currentDirectoryURL = Self.safeWorkingDirectory()
+        process.environment = Self.processEnvironment(merging: config.environment)
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -68,5 +69,24 @@ public struct CommandRunner: CommandRunning {
             standardOutput: String(data: outputData, encoding: .utf8) ?? "",
             standardError: String(data: errorData, encoding: .utf8) ?? ""
         )
+    }
+
+    private static func safeWorkingDirectory() -> URL {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ai-usage", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private static func processEnvironment(merging custom: [String: String]) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        let fallbackPath = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        if let existing = environment["PATH"], !existing.isEmpty {
+            environment["PATH"] = "\(fallbackPath):\(existing)"
+        } else {
+            environment["PATH"] = fallbackPath
+        }
+        environment.merge(custom) { _, new in new }
+        return environment
     }
 }

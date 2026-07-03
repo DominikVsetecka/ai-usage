@@ -145,14 +145,33 @@ private struct ProviderDetailSection: View {
     private var isFailed: Bool { snapshot.status == .failed && snapshot.percentUsed == nil }
 
     private var fiveHourBurn: [BurnPoint] {
-        let cutoff = Date().addingTimeInterval(-5 * 3600)
-        return sparkPoints
-            .filter { $0.ts >= cutoff }
-            .compactMap { sp in sp.fiveHour.map { BurnPoint(id: sp.ts, ts: sp.ts, pct: $0) } }
+        burnPoints(
+            duration: 5 * 3600,
+            resetsAt: snapshot.fiveHour?.resetsAt,
+            value: \.fiveHour
+        )
     }
 
     private var oneWeekBurn: [BurnPoint] {
-        sparkPoints.compactMap { sp in sp.oneWeek.map { BurnPoint(id: sp.ts, ts: sp.ts, pct: $0) } }
+        burnPoints(
+            duration: 7 * 24 * 3600,
+            resetsAt: snapshot.oneWeek?.resetsAt,
+            value: \.oneWeek
+        )
+    }
+
+    private func burnPoints(
+        duration: TimeInterval,
+        resetsAt: Date?,
+        value: KeyPath<SparkPoint, Int?>
+    ) -> [BurnPoint] {
+        let now = Date()
+        let windowStart = resetsAt?.addingTimeInterval(-duration) ?? now.addingTimeInterval(-duration)
+        return sparkPoints
+            .filter { $0.ts >= windowStart && $0.ts <= now }
+            .compactMap { sp in
+                sp[keyPath: value].map { BurnPoint(id: sp.ts, ts: sp.ts, pct: $0) }
+            }
     }
 
     var body: some View {
@@ -171,7 +190,6 @@ private struct ProviderDetailSection: View {
                 isStale: isStale,
                 remainingCountdown: config.showsRemainingCountdown,
                 burnPoints: fiveHourBurn,
-                windowDuration: 5 * 3600,
                 sparklineDirection: config.sparklineDirection ?? .ascending
             )
             WindowRow(
@@ -180,7 +198,6 @@ private struct ProviderDetailSection: View {
                 isStale: isStale,
                 remainingCountdown: config.showsRemainingCountdown,
                 burnPoints: oneWeekBurn,
-                windowDuration: 7 * 24 * 3600,
                 sparklineDirection: config.sparklineDirection ?? .ascending
             )
 
@@ -226,7 +243,6 @@ private struct WindowRow: View {
     let isStale: Bool
     let remainingCountdown: Bool
     let burnPoints: [BurnPoint]
-    let windowDuration: TimeInterval
     let sparklineDirection: SparklineDirection
 
     var body: some View {
@@ -240,15 +256,12 @@ private struct WindowRow: View {
                 if let window {
                     let displayPct = remainingCountdown ? max(0, 100 - window.percentUsed) : window.percentUsed
                     let color = barColor(pct: window.percentUsed)
-                    let resetMarker = window.resetsAt.map { $0.addingTimeInterval(-windowDuration) }
 
                     BurnBarView(
                         burnPoints: burnPoints,
                         currentPct: window.percentUsed,
                         remainingCountdown: remainingCountdown,
                         color: color,
-                        resetMarkerDate: resetMarker,
-                        windowDuration: windowDuration,
                         sparklineDirection: sparklineDirection
                     )
 
@@ -307,8 +320,6 @@ private struct BurnBarView: View {
     let currentPct: Int
     let remainingCountdown: Bool
     let color: Color
-    var resetMarkerDate: Date? = nil
-    var windowDuration: TimeInterval = 0
     var sparklineDirection: SparklineDirection = .ascending
 
     @State private var hoveredPoint: BurnPoint? = nil
@@ -362,40 +373,6 @@ private struct BurnBarView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: Self.radius))
-            // Reset marker overlay — outside clipShape so it can extend above the bar
-            .overlay(alignment: .topLeading) {
-                let resetX: CGFloat? = {
-                    guard let rm = resetMarkerDate, sparkW > 0 else { return nil }
-                    // Prefer sparkline-aligned position when history spans the reset point
-                    if burnPoints.count >= 2 {
-                        let t0 = burnPoints.first!.ts
-                        let dt = burnPoints.last!.ts.timeIntervalSince(t0)
-                        if dt > 0, rm >= t0, rm <= burnPoints.last!.ts {
-                            return sparkOffX + CGFloat(1.0 - rm.timeIntervalSince(t0) / dt) * sparkW
-                        }
-                    }
-                    // Fallback: position by window-fraction (works even without burn history)
-                    guard windowDuration > 0 else { return nil }
-                    let resetAge = -rm.timeIntervalSinceNow  // positive when rm is in the past
-                    guard resetAge > 0, resetAge < windowDuration else { return nil }
-                    return sparkOffX + CGFloat(resetAge / windowDuration) * sparkW
-                }()
-                if let x = resetX {
-                    ZStack(alignment: .topLeading) {
-                        // Solid vertical line through the bar
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.35))
-                            .frame(width: 1.5, height: H)
-                            .offset(x: x - 0.75)
-                        // Dot above bar — clearly visible tick mark
-                        Circle()
-                            .fill(color)
-                            .frame(width: 5, height: 5)
-                            .offset(x: x - 2.5, y: -6)
-                    }
-                    .allowsHitTesting(false)
-                }
-            }
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let loc):
@@ -487,4 +464,3 @@ private func drawCurve(
         ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)), with: .color(color))
     }
 }
-

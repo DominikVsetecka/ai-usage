@@ -235,6 +235,47 @@ check(rotatedCredentials?.refreshToken == "fixture-refresh-two", "rotated refres
 let recordedRequests = await queueTransport.requests
 check(recordedRequests.count == 2, "expired credentials should refresh once before usage request")
 
+let historyDirectory = FileManager.default.temporaryDirectory
+    .appendingPathComponent("ai-usage-history-check-\(UUID().uuidString)", isDirectory: true)
+try FileManager.default.createDirectory(at: historyDirectory, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: historyDirectory) }
+
+let historyStore = UsageHistoryStore(directory: historyDirectory)
+let historyNow = Calendar.current.date(from: DateComponents(
+    year: 2026, month: 7, day: 3, hour: 17, minute: 30, second: 0
+))!
+let historyTooOld = historyNow.addingTimeInterval(-25 * 60 * 60)
+let historyYesterdayInsideWindow = historyNow.addingTimeInterval(-23 * 60 * 60)
+let historyToday = historyNow.addingTimeInterval(-30 * 60)
+let historyEncoder = JSONEncoder()
+historyEncoder.dateEncodingStrategy = .secondsSince1970
+let historyFormatter = DateFormatter()
+historyFormatter.dateFormat = "yyyy-MM-dd"
+
+func writeHistoryFixture(_ entries: [UsageHistoryEntry], for date: Date) throws {
+    let path = historyDirectory.appendingPathComponent("\(historyFormatter.string(from: date)).jsonl")
+    var data = Data()
+    for entry in entries {
+        data.append(try historyEncoder.encode(entry))
+        data.append(UInt8(ascii: "\n"))
+    }
+    try data.write(to: path, options: .atomic)
+}
+
+try writeHistoryFixture([
+    UsageHistoryEntry(ts: historyTooOld, sources: ["codex": .init(fiveHour: 90, oneWeek: 9)]),
+    UsageHistoryEntry(ts: historyYesterdayInsideWindow, sources: ["codex": .init(fiveHour: 10, oneWeek: 1)])
+], for: historyYesterdayInsideWindow)
+try writeHistoryFixture([
+    UsageHistoryEntry(ts: historyToday, sources: ["codex": .init(fiveHour: 20, oneWeek: 2)])
+], for: historyToday)
+
+let rollingDayHistory = await historyStore.load(days: 1, now: historyNow)
+check(rollingDayHistory.map(\.ts) == [historyYesterdayInsideWindow, historyToday], "24h history should be rolling, not calendar-day only")
+let todayStart = Calendar.current.startOfDay(for: historyNow)
+let todayHistory = await historyStore.load(from: todayStart, to: historyNow)
+check(todayHistory.map(\.ts) == [historyToday], "today history should start at local midnight")
+
 if ProcessInfo.processInfo.environment["AI_USAGE_LIVE_CLAUDE_OAUTH_CHECK"] == "1" {
     let liveProfileID = UUID()
     let liveStore = KeychainClaudeCredentialStore()

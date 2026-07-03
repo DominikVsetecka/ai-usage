@@ -4,9 +4,19 @@ public struct UsageHistoryEntry: Codable, Sendable {
     public let ts: Date
     public let sources: [String: WindowSnapshot]
 
+    public init(ts: Date, sources: [String: WindowSnapshot]) {
+        self.ts = ts
+        self.sources = sources
+    }
+
     public struct WindowSnapshot: Codable, Sendable {
         public let fiveHour: Int?
         public let oneWeek: Int?
+
+        public init(fiveHour: Int?, oneWeek: Int?) {
+            self.fiveHour = fiveHour
+            self.oneWeek = oneWeek
+        }
     }
 }
 
@@ -62,19 +72,32 @@ public actor UsageHistoryStore {
         cleanOldFiles(relativeTo: now)
     }
 
-    public func load(days: Int = 1) -> [UsageHistoryEntry] {
+    public func load(days: Int = 1, now: Date = Date()) -> [UsageHistoryEntry] {
+        let dayCount = max(1, days)
+        let cutoff = now.addingTimeInterval(-TimeInterval(dayCount) * 86_400)
+        return load(from: cutoff, to: now)
+    }
+
+    public func load(from start: Date, to end: Date = Date()) -> [UsageHistoryEntry] {
         let calendar = Calendar.current
-        let today = Date()
+        let lowerBound = min(start, end)
+        let upperBound = max(start, end)
         var entries: [UsageHistoryEntry] = []
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .secondsSince1970
 
-        for offset in 0..<days {
-            guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
+        let startOfLowerDay = calendar.startOfDay(for: lowerBound)
+        let startOfUpperDay = calendar.startOfDay(for: upperBound)
+        let daySpan = calendar.dateComponents([.day], from: startOfLowerDay, to: startOfUpperDay).day ?? 0
+
+        for offset in 0...max(0, daySpan) {
+            guard let date = calendar.date(byAdding: .day, value: offset, to: startOfLowerDay) else { continue }
             guard let data = try? Data(contentsOf: filePath(for: date)) else { continue }
             for line in data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true) {
                 if let entry = try? decoder.decode(UsageHistoryEntry.self, from: Data(line)) {
-                    entries.append(entry)
+                    if entry.ts >= lowerBound && entry.ts <= upperBound {
+                        entries.append(entry)
+                    }
                 }
             }
         }
