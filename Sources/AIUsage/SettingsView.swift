@@ -22,23 +22,18 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
+        TabView(selection: $selectedTab) {
+            settingsContent
+                .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(SettingsTab.settings)
 
-            TabView(selection: $selectedTab) {
-                settingsContent
-                    .tabItem { Label("Settings", systemImage: "gearshape") }
-                    .tag(SettingsTab.settings)
+            HistoryView(historyStore: historyStore, config: draft)
+                .tabItem { Label("History", systemImage: "chart.line.uptrend.xyaxis") }
+                .tag(SettingsTab.history)
 
-                HistoryView(historyStore: historyStore, config: draft)
-                    .tabItem { Label("History", systemImage: "chart.line.uptrend.xyaxis") }
-                    .tag(SettingsTab.history)
-
-                InfoView()
-                    .tabItem { Label("Info", systemImage: "info.circle") }
-                    .tag(SettingsTab.info)
-            }
+            InfoView()
+                .tabItem { Label("Info", systemImage: "info.circle") }
+                .tag(SettingsTab.info)
         }
         .frame(minWidth: 660, minHeight: 660)
     }
@@ -110,23 +105,6 @@ struct SettingsView: View {
             }
             .padding(16)
         }
-    }
-
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "gauge.with.dots.needle.67percent")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("AI Usage")
-                    .font(.headline)
-                Text("Configure each menu bar value")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(16)
     }
 
     private var remainingCountdownBinding: Binding<Bool> {
@@ -865,20 +843,9 @@ private struct InfoView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            VStack(spacing: 6) {
-                Image(systemName: "gauge.with.dots.needle.67percent")
-                    .font(.system(size: 52, weight: .light))
-                    .foregroundStyle(.tint)
-                    .padding(.bottom, 4)
-                Text("AI Usage")
-                    .font(.largeTitle.weight(.semibold))
-                Text("Version 1.0")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Text("by Dominik Vsetecka")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+            Text("Version 1.0")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
 
             Button {
                 NSWorkspace.shared.open(URL(string: "https://github.com/DominikVsetecka/ai-usage")!)
