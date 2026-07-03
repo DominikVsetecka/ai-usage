@@ -47,6 +47,28 @@ final class PopoverViewModel: ObservableObject {
 struct UsagePopoverView: View {
     @ObservedObject var viewModel: PopoverViewModel
 
+    static let preferredWidth: CGFloat = 380
+
+    static func preferredContentSize(for snapshots: [UsageSnapshot]) -> CGSize {
+        let enabledSnapshots = snapshots.filter(\.enabled)
+        if enabledSnapshots.isEmpty {
+            return CGSize(width: preferredWidth, height: 132)
+        }
+
+        let headerHeight: CGFloat = 41
+        let footerHeight: CGFloat = 34
+        let dividerHeight: CGFloat = 2 + CGFloat(max(0, enabledSnapshots.count - 1))
+        let providerHeight: CGFloat = 103
+        let failedExtraHeight: CGFloat = 28
+        let failedCount = enabledSnapshots.filter { $0.status == .failed && $0.percentUsed == nil }.count
+        let contentHeight = headerHeight
+            + footerHeight
+            + dividerHeight
+            + CGFloat(enabledSnapshots.count) * providerHeight
+            + CGFloat(failedCount) * failedExtraHeight
+        return CGSize(width: preferredWidth, height: min(520, max(132, contentHeight)))
+    }
+
     private var enabledSnapshots: [UsageSnapshot] {
         viewModel.snapshots.filter(\.enabled)
     }
@@ -79,7 +101,10 @@ struct UsagePopoverView: View {
             Divider()
             popoverFooter
         }
-        .frame(width: 380)
+        .frame(
+            width: Self.preferredWidth,
+            height: Self.preferredContentSize(for: viewModel.snapshots).height
+        )
         .onAppear {
             Task { await viewModel.loadHistory() }
         }

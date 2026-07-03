@@ -80,6 +80,7 @@ final class StatusBarController {
         pop.behavior = .transient
         pop.animates = true
         pop.appearance = NSAppearance(named: .darkAqua)
+        pop.contentSize = UsagePopoverView.preferredContentSize(for: vm.snapshots)
         pop.contentViewController = NSHostingController(rootView: UsagePopoverView(viewModel: vm))
 
         self.popoverViewModel = vm
@@ -94,13 +95,11 @@ final class StatusBarController {
             guard let button = statusItem.button else { return }
             popoverViewModel?.snapshots = monitor.snapshots
             popoverViewModel?.config = config
+            updatePopoverContentSize()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             NSApp.activate(ignoringOtherApps: true)
             if let popoverWindow = popover.contentViewController?.view.window {
                 popoverWindow.appearance = NSAppearance(named: .darkAqua)
-                var f = popoverWindow.frame
-                f.origin.y -= 60
-                popoverWindow.setFrameOrigin(f.origin)
             }
         }
     }
@@ -132,6 +131,11 @@ final class StatusBarController {
         renderStatusTitle()
         popoverViewModel?.snapshots = monitor.snapshots
         popoverViewModel?.config = config
+        updatePopoverContentSize()
+    }
+
+    private func updatePopoverContentSize() {
+        popover?.contentSize = UsagePopoverView.preferredContentSize(for: monitor.snapshots)
     }
 
     private func renderStatusTitle() {
