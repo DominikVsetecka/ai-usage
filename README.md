@@ -13,7 +13,11 @@ Click the menu bar item to open a popover with per-provider details, burn-rate s
 ## Requirements
 
 - macOS 13 Ventura or later
-- Swift 6 toolchain (Xcode 16+ or [swift.org](https://swift.org/download/))
+- Swift 6 toolchain — the Xcode Command Line Tools are enough, no need for the full Xcode app:
+  ```bash
+  xcode-select --install
+  ```
+  (Full [Xcode](https://developer.apple.com/xcode/) or the [swift.org](https://swift.org/download/) toolchain also work.)
 - **`claude`** — [Anthropic Claude Code](https://claude.ai/code) installed and in `$PATH`
 - **`codex`** — [OpenAI Codex CLI](https://github.com/openai/codex) installed and in `$PATH`
 
@@ -40,16 +44,13 @@ Print current values without starting the menu bar app:
 swift run AIUsageSnapshot
 ```
 
-### Running the binary on another machine
+### Why build it yourself
 
-The compiled `AIUsage` binary is a plain command-line executable — there is no `.app` bundle, so double-clicking won't work directly. Options:
+There's no signed, notarized release binary to download — this is a small personal project, not a distributed product. The recommended way to run it is to build it locally with `swift run AIUsage` (above), which only needs the Swift toolchain from the Command Line Tools.
 
-**Drag into Terminal** — drag `.build/release/AIUsage` from Finder into a Terminal window and press Return.
+Building it yourself also sidesteps macOS Gatekeeper entirely: Gatekeeper only flags binaries that were *downloaded* (browser, AirDrop, etc.) and carry a quarantine flag. A binary you compile locally never gets that flag, so there's no "unidentified developer" warning to work around.
 
-**Run from the shell:**
-```bash
-/path/to/AIUsage
-```
+Once built, `.build/release/AIUsage` is a plain command-line executable (no `.app` bundle, so double-clicking won't launch it). To run it conveniently:
 
 **Keep it in your PATH:**
 ```bash
@@ -57,18 +58,14 @@ cp .build/release/AIUsage /usr/local/bin/ai-usage
 ai-usage        # run from anywhere
 ```
 
-**Launch on login with a shell script** — create `~/ai-usage.sh`:
+**Launch on login** — add a shell script to System Settings → General → Login Items:
 ```bash
 #!/bin/bash
 /usr/local/bin/ai-usage
 ```
-Then make it executable and add it to System Settings → General → Login Items:
-```bash
-chmod +x ~/ai-usage.sh
-```
-macOS Gatekeeper may block the binary on first run. If you see a security warning, open System Settings → Privacy & Security, scroll down and click **Allow Anyway**.
+Make it executable first: `chmod +x ~/ai-usage.sh`.
 
-> **Note:** `.command` files must be marked executable (`chmod +x`) before double-clicking works. macOS will still show a Gatekeeper prompt on first open for unsigned binaries.
+If you do copy the built binary to another Mac (e.g. via a network share), that copy also won't be quarantined — only files that traveled through a browser download or similar are. If macOS still warns about it, open System Settings → Privacy & Security and click **Allow Anyway**.
 
 ## Features
 
