@@ -12,6 +12,8 @@ Click the menu bar item to open a popover with per-provider details, burn-rate s
   <img src="ai-usage-popover-2026-07v2.png" width="320" alt="Menu bar popover">
   <img src="ai-usage-settings-2026-07.png" width="320" alt="Settings">
   <img src="ai-usage-history-2026-07.png" width="320" alt="History">
+  <img src="ai-usage-popover-2026-07v3.png" width="320" alt="Popover with a Visual bar style and an extra model-scoped quota row">
+  <img src="ai-usage-settings-popover-2026-07.png" width="320" alt="Popover settings: bar style, per-connection window and percent controls">
 </div>
 
 ## Requirements
