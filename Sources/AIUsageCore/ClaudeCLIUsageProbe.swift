@@ -227,6 +227,15 @@ public struct ClaudeCLIUsageProbe: UsageProbing {
 public struct ClaudeUsageResult: Equatable, Sendable {
     public let session: ProviderUsageWindow?
     public let weekly: ProviderUsageWindow?
+    /// Model-scoped extra weekly limits (e.g. "Fable"), keyed by display name.
+    /// Only the OAuth JSON API exposes these; the CLI's /usage screen doesn't.
+    public let extra: [String: ProviderUsageWindow]
+
+    public init(session: ProviderUsageWindow?, weekly: ProviderUsageWindow?, extra: [String: ProviderUsageWindow] = [:]) {
+        self.session = session
+        self.weekly = weekly
+        self.extra = extra
+    }
 }
 
 private struct ClaudeUsageError: LocalizedError {

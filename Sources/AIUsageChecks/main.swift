@@ -54,6 +54,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) -> Bool {
 let config = AppConfig.default
 check(config.refreshIntervalSeconds == 30, "default refresh should be 30s")
 check(config.showsRemainingCountdown == false, "remaining countdown should default off")
+check(config.resolvedVisualHistoryStyle == .bars, "history style should default to bars")
 check(config.sources.map(\.label) == ["C1", "C2", "GPT"], "default labels should be C1/C2/GPT")
 check(config.sources[0].mode == .claudeCLI, "Claude 1 should default to CLI mode")
 check(config.sources[1].enabled == false, "Claude 2 should default disabled until a second account path is configured")
@@ -69,10 +70,12 @@ let temporaryConfigURL = FileManager.default.temporaryDirectory
     .appendingPathComponent("ai-usage-check-config.json")
 var countdownConfig = config
 countdownConfig.remainingCountdownEnabled = true
+countdownConfig.visualHistoryStyle = .line
 try countdownConfig.save(to: temporaryConfigURL)
 let reloadedConfig = try AppConfig.load(from: temporaryConfigURL)
 check(reloadedConfig == countdownConfig, "saved settings should load without changes")
 check(reloadedConfig.showsRemainingCountdown, "countdown setting should persist")
+check(reloadedConfig.resolvedVisualHistoryStyle == .line, "history style should persist")
 try? FileManager.default.removeItem(at: temporaryConfigURL)
 
 let snapshots = [
@@ -205,6 +208,31 @@ let oauthUsageFixture = Data(#"{"five_hour":{"utilization":22.4,"resets_at":"203
 let oauthUsage = try ClaudeOAuthUsageService.parseUsageResponse(oauthUsageFixture)
 check(oauthUsage.session?.percentUsed == 22, "Claude OAuth parser should read five-hour usage")
 check(oauthUsage.weekly?.percentUsed == 61, "Claude OAuth parser should read weekly usage")
+check(oauthUsage.extra.isEmpty, "Claude OAuth parser should report no extras when limits is absent")
+
+// Real-world shape observed from the live API: a "limits" array with a
+// model-scoped entry (scope.model.display_name) for extra per-model quotas
+// like a "Fable" weekly cap, alongside the plain session/weekly_all entries.
+let oauthUsageWithExtraFixture = Data(#"""
+{
+  "five_hour": {"utilization": 51, "resets_at": "2030-03-17T12:30:00Z"},
+  "seven_day": {"utilization": 31, "resets_at": "2030-03-20T18:45:00Z"},
+  "limits": [
+    {"group": "session", "kind": "session", "percent": 51, "resets_at": "2030-03-17T12:30:00Z"},
+    {"group": "weekly", "kind": "weekly_all", "percent": 31, "resets_at": "2030-03-20T18:45:00Z"},
+    {"group": "weekly", "kind": "weekly_scoped", "percent": 19, "resets_at": "2030-03-20T18:45:00Z",
+     "scope": {"model": {"display_name": "Fable", "id": null}}}
+  ]
+}
+"""#.utf8)
+let oauthUsageWithExtra = try ClaudeOAuthUsageService.parseUsageResponse(oauthUsageWithExtraFixture)
+check(oauthUsageWithExtra.extra["Fable"]?.percentUsed == 19, "Claude OAuth parser should extract model-scoped extra limits like Fable")
+check(oauthUsageWithExtra.extra.count == 1, "Claude OAuth parser should ignore limits without a model scope")
+// Regression: resetsAt must come from the ISO instant directly, not from a
+// locale-formatted round-trip through resetDescription (which silently
+// failed — and left resetsAt nil — on any non-English-month system locale).
+check(oauthUsageWithExtra.extra["Fable"]?.resetsAt != nil, "extra window resetsAt should parse directly from the ISO date, not via locale text round-trip")
+check(oauthUsageWithExtra.weekly?.resetsAt != nil, "weekly window resetsAt should parse directly from the ISO date")
 
 let refreshProfileID = UUID()
 let memoryStore = MemoryClaudeCredentialStore()

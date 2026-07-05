@@ -80,7 +80,7 @@ final class StatusBarController {
         pop.behavior = .transient
         pop.animates = true
         pop.appearance = NSAppearance(named: .darkAqua)
-        pop.contentSize = UsagePopoverView.preferredContentSize(for: vm.snapshots)
+        pop.contentSize = UsagePopoverView.preferredContentSize(for: vm.snapshots, config: config)
         pop.contentViewController = NSHostingController(rootView: UsagePopoverView(viewModel: vm))
 
         self.popoverViewModel = vm
@@ -135,7 +135,7 @@ final class StatusBarController {
     }
 
     private func updatePopoverContentSize() {
-        popover?.contentSize = UsagePopoverView.preferredContentSize(for: monitor.snapshots)
+        popover?.contentSize = UsagePopoverView.preferredContentSize(for: monitor.snapshots, config: config)
     }
 
     private func renderStatusTitle() {

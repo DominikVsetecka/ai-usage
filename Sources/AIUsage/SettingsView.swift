@@ -52,7 +52,10 @@ struct SettingsView: View {
                     .pickerStyle(.menu)
 
                     Toggle("Remaining countdown (100% to 0%)", isOn: remainingCountdownBinding)
+                        .help("Show how much quota is left instead of how much is used — affects both the menu bar and the popover.")
+                }
 
+                Section {
                     Picker("Font size", selection: $draft.menuBarFontSize) {
                         Text("System (\(Int(NSFont.systemFontSize))pt)").tag(Optional<CGFloat>.none)
                         Text("11pt").tag(Optional<CGFloat>.some(11))
@@ -79,12 +82,99 @@ struct SettingsView: View {
                         Text("Usage gradient (green → red)").tag(TextColorMode.percentageGradient)
                     }
                     .pickerStyle(.menu)
+                } header: {
+                    Text("Menu Bar")
+                } footer: {
+                    Text("How the percentage text looks in the macOS menu bar.")
+                }
 
-                    Picker("Sparkline direction", selection: sparklineDirectionBinding) {
+                Section {
+                    VisualBarPreviewRow(config: draft)
+                        .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
+
+                    Picker("Bar fill", selection: visualBarModeBinding) {
+                        ForEach(VisualBarMode.allCases, id: \.self) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    LabeledContent("Bar height") {
+                        HStack {
+                            Slider(
+                                value: visualBarHeightBinding,
+                                in: AppConfig.visualBarHeightRange,
+                                step: 1
+                            )
+                            Text("\(Int(draft.resolvedVisualBarHeight))pt")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 34, alignment: .trailing)
+                        }
+                    }
+
+                    Picker("History style", selection: visualHistoryStyleBinding) {
+                        ForEach(VisualHistoryStyle.allCases, id: \.self) { style in
+                            Text(style.displayName).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if draft.resolvedVisualHistoryStyle == .bars {
+                        Picker("History block width", selection: visualBlockWidthBinding) {
+                            ForEach(VisualBlockWidth.allCases, id: \.self) { width in
+                                Text(width.displayName).tag(width)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    LabeledContent("History darkness") {
+                        HStack {
+                            Slider(
+                                value: visualHistoryDarkenBinding,
+                                in: AppConfig.visualHistoryDarkenRange,
+                                step: 5
+                            )
+                            Text("\(Int(draft.resolvedVisualHistoryDarken))%")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 34, alignment: .trailing)
+                        }
+                    }
+
+                    Picker("History direction", selection: sparklineDirectionBinding) {
                         Text("Ascending — rises with usage").tag(SparklineDirection.ascending)
                         Text("Descending — drops from top").tag(SparklineDirection.descending)
                     }
                     .pickerStyle(.segmented)
+
+                    LabeledContent("Percent size") {
+                        HStack {
+                            Slider(
+                                value: popoverPercentFontSizeBinding,
+                                in: AppConfig.popoverPercentFontSizeRange,
+                                step: 1
+                            )
+                            Text("\(Int(draft.resolvedPopoverPercentFontSize))pt")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 34, alignment: .trailing)
+                        }
+                    }
+
+                    Picker("Percent weight", selection: popoverPercentFontWeightBinding) {
+                        Text("Light").tag("light")
+                        Text("Regular").tag("regular")
+                        Text("Medium").tag("medium")
+                        Text("Semibold (default)").tag("semibold")
+                        Text("Bold").tag("bold")
+                    }
+                    .pickerStyle(.menu)
+                } header: {
+                    Text("Popover")
+                } footer: {
+                    Text("How the usage bars in the click-to-open popover look: the fill shows the current cycle, the history shows past updates.")
                 }
 
                 ForEach(draft.sources.indices, id: \.self) { index in
@@ -114,6 +204,55 @@ struct SettingsView: View {
         )
     }
 
+    private var visualBarModeBinding: Binding<VisualBarMode> {
+        Binding(
+            get: { draft.resolvedVisualBarMode },
+            set: { draft.visualBarMode = $0 == .time ? nil : $0 }
+        )
+    }
+
+    private var visualBlockWidthBinding: Binding<VisualBlockWidth> {
+        Binding(
+            get: { draft.resolvedVisualBlockWidth },
+            set: { draft.visualBlockWidth = $0 == .medium ? nil : $0 }
+        )
+    }
+
+    private var visualBarHeightBinding: Binding<CGFloat> {
+        Binding(
+            get: { draft.resolvedVisualBarHeight },
+            set: { draft.visualBarHeight = $0 }
+        )
+    }
+
+    private var visualHistoryStyleBinding: Binding<VisualHistoryStyle> {
+        Binding(
+            get: { draft.resolvedVisualHistoryStyle },
+            set: { draft.visualHistoryStyle = $0 == .bars ? nil : $0 }
+        )
+    }
+
+    private var visualHistoryDarkenBinding: Binding<Double> {
+        Binding(
+            get: { draft.resolvedVisualHistoryDarken },
+            set: { draft.visualHistoryDarken = $0 }
+        )
+    }
+
+    private var popoverPercentFontSizeBinding: Binding<CGFloat> {
+        Binding(
+            get: { draft.resolvedPopoverPercentFontSize },
+            set: { draft.popoverPercentFontSize = $0 }
+        )
+    }
+
+    private var popoverPercentFontWeightBinding: Binding<String> {
+        Binding(
+            get: { draft.popoverPercentFontWeight ?? "semibold" },
+            set: { draft.popoverPercentFontWeight = $0 == "semibold" ? nil : $0 }
+        )
+    }
+
     private var fontWeightBinding: Binding<String> {
         Binding(
             get: { draft.menuBarFontWeight ?? "medium" },
@@ -133,6 +272,67 @@ struct SettingsView: View {
             get: { draft.sparklineDirection ?? .ascending },
             set: { draft.sparklineDirection = $0 == .ascending ? nil : $0 }
         )
+    }
+}
+
+/// Live "how it'll look" demo for the Popover bar settings — same row layout
+/// and same bar view as the real popover, driven by fixed sample data so it
+/// updates instantly as the user changes bar fill, height, or history style.
+private struct VisualBarPreviewRow: View {
+    let config: AppConfig
+
+    private static let demoPct = 58
+    private static let demoCycleRemainingFrac: CGFloat = 0.62
+
+    // A fixed, realistic-looking usage curve — climbs, resets, climbs again —
+    // purely for demonstration; unrelated to any real usage history.
+    private static let demoPoints: [BurnPoint] = {
+        let shape = [4, 4, 4, 9, 15, 18, 22, 26, 29, 31, 33, 0, 0, 3, 7, 10, 14, 17, 19, 22, 25, 28, 31, 34, 37, 40, 42, 45, 47, 49, 52, 55, 58]
+        let step: TimeInterval = 600
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        return shape.enumerated().map { index, pct in
+            let ts = base.addingTimeInterval(TimeInterval(index) * step)
+            return BurnPoint(id: ts, ts: ts, pct: pct)
+        }
+    }()
+
+    private var demoColor: Color {
+        let remaining = 100 - min(100, max(0, Self.demoPct))
+        return Color(hue: Double(remaining) / 300, saturation: 0.82, brightness: 0.88)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Preview")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Text("5-hour")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 46, alignment: .leading)
+
+                VisualBurnBarView(
+                    burnPoints: Self.demoPoints,
+                    currentPct: Self.demoPct,
+                    remainingCountdown: config.showsRemainingCountdown,
+                    color: demoColor,
+                    sparklineDirection: config.sparklineDirection ?? .ascending,
+                    barMode: config.resolvedVisualBarMode,
+                    blockWidth: config.resolvedVisualBlockWidth,
+                    historyStyle: config.resolvedVisualHistoryStyle,
+                    barHeight: config.resolvedVisualBarHeight,
+                    historyDarken: config.resolvedVisualHistoryDarken,
+                    cycleRemainingFrac: Self.demoCycleRemainingFrac
+                )
+
+                let displayPct = config.showsRemainingCountdown ? max(0, 100 - Self.demoPct) : Self.demoPct
+                Text("\(displayPct)%")
+                    .font(.system(size: config.resolvedPopoverPercentFontSize, weight: resolvedPercentFontWeight(from: config.popoverPercentFontWeight), design: .monospaced).monospacedDigit())
+                    .frame(width: 34, alignment: .trailing)
+            }
+        }
     }
 }
 
@@ -193,13 +393,35 @@ private struct ProviderSettingsSection: View {
                 .textFieldStyle(.roundedBorder)
                 .disabled(!source.enabled)
 
-            Picker("Usage value", selection: quotaBinding) {
+            Picker("Usage value in menu bar", selection: quotaBinding) {
                 ForEach(QuotaSelection.allCases, id: \.self) { quota in
                     Text(quota.displayName).tag(quota)
                 }
             }
             .pickerStyle(.segmented)
             .disabled(!source.enabled)
+
+            LabeledContent("Show in popover") {
+                HStack(spacing: 16) {
+                    Toggle("5-hour", isOn: showFiveHourBinding)
+                    Toggle("1-week", isOn: showOneWeekBinding)
+                    if isClaude {
+                        Toggle("Extra", isOn: showExtraBinding)
+                            .help("Model-scoped weekly limits some plans report, like \"Fable\" — only available with the Secure profile connection.")
+                    }
+                    Toggle("Percent", isOn: showPercentBinding)
+                }
+            }
+            .disabled(!source.enabled)
+
+            Picker("Percent shown", selection: $source.popoverPercentMode) {
+                Text("Global default").tag(Optional<PercentDisplayMode>.none)
+                ForEach(PercentDisplayMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(Optional(mode))
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!source.enabled || !source.resolvedShowPercentInPopover)
 
             if isClaude {
                 Picker("Connection", selection: claudeConnectionBinding) {
@@ -287,9 +509,9 @@ private struct ProviderSettingsSection: View {
         } footer: {
             if isClaude {
                 if usesClaudeProfile {
-                    Text("Credentials are copied into a separate AI Usage Keychain item. Importing never changes the account used by Claude Code, VS Code or Zed.")
+                    Text("Credentials are copied into a separate AI Usage Keychain item. Importing never changes the account used by Claude Code, VS Code or Zed. Secure profile is also required to see extra model-scoped limits some plans report (e.g. \"Fable\") — the Claude CLI connection can't read those.")
                 } else {
-                    Text("Use a separate CLAUDE_CONFIG_DIR for a second subscription. The OAuth setup-token environment variable is excluded from the probe.")
+                    Text("Use a separate CLAUDE_CONFIG_DIR for a second subscription. The OAuth setup-token environment variable is excluded from the probe. Note: extra model-scoped limits some plans report (e.g. \"Fable\") only show up with the Secure profile connection, not Claude CLI.")
                 }
             } else {
                 Text("Uses JSON-RPC initialize, initialized, then account/rateLimits/read in read-only mode.")
@@ -483,6 +705,34 @@ private struct ProviderSettingsSection: View {
         )
     }
 
+    private var showFiveHourBinding: Binding<Bool> {
+        Binding(
+            get: { source.resolvedShowFiveHourInPopover },
+            set: { source.showFiveHourInPopover = $0 }
+        )
+    }
+
+    private var showOneWeekBinding: Binding<Bool> {
+        Binding(
+            get: { source.resolvedShowOneWeekInPopover },
+            set: { source.showOneWeekInPopover = $0 }
+        )
+    }
+
+    private var showExtraBinding: Binding<Bool> {
+        Binding(
+            get: { source.resolvedShowExtraInPopover },
+            set: { source.showExtraInPopover = $0 }
+        )
+    }
+
+    private var showPercentBinding: Binding<Bool> {
+        Binding(
+            get: { source.resolvedShowPercentInPopover },
+            set: { source.showPercentInPopover = $0 }
+        )
+    }
+
     private var executableBinding: Binding<String> {
         Binding(
             get: { source.command?.executable ?? "" },
@@ -514,6 +764,48 @@ private struct ProviderSettingsSection: View {
 
 }
 
+/// Tappable chips to show/hide individual series in the History chart, so a
+/// busy chart with many connections can be decluttered on the fly.
+private struct SeriesToggleRow: View {
+    let seriesNames: [String]
+    @Binding var hidden: Set<String>
+    let color: (String) -> Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(seriesNames, id: \.self) { name in
+                let isVisible = !hidden.contains(name)
+                Button {
+                    if isVisible {
+                        hidden.insert(name)
+                    } else {
+                        hidden.remove(name)
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(isVisible ? color(name) : Color.secondary.opacity(0.35))
+                            .frame(width: 7, height: 7)
+                        Text(name)
+                            .font(.caption)
+                            .foregroundStyle(isVisible ? .primary : .secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule().fill(isVisible ? color(name).opacity(0.14) : Color.secondary.opacity(0.08))
+                    )
+                    .overlay(
+                        Capsule().stroke(isVisible ? color(name).opacity(0.4) : Color.clear, lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
 // MARK: - History tab
 
 private struct HistoryView: View {
@@ -527,8 +819,31 @@ private struct HistoryView: View {
     @State private var xZoomDomain: ClosedRange<Date>?
     @State private var dragStartX: CGFloat?
     @State private var dragEndX: CGFloat?
+    @State private var hiddenSeries: Set<String> = []
 
     private var enabledSources: [SourceConfig] { config.sources.filter(\.enabled) }
+
+    // Every series that could appear, regardless of whether it currently has
+    // data — lets the toggle row stay stable as sources gain/lose points.
+    // Extra (model-scoped) series names aren't known ahead of time, so they're
+    // discovered from whatever's actually been recorded for each source.
+    private var allSeriesNames: [String] {
+        enabledSources.flatMap { source -> [String] in
+            var names = ["\(source.label) 5h", "\(source.label) 1w"]
+            let extraNames = Set(entries.compactMap { $0.sources[source.id]?.extra?.keys }.flatMap { $0 }).sorted()
+            names += extraNames.map { "\(source.label) \($0)" }
+            return names
+        }
+    }
+
+    // A fixed, deterministic palette so a series always gets the same color
+    // in the legend, the chart lines, and its own toggle chip.
+    private static let seriesPalette: [Color] = [.blue, .green, .orange, .purple, .pink, .teal, .yellow, .indigo]
+
+    private func color(for series: String) -> Color {
+        guard let index = allSeriesNames.firstIndex(of: series) else { return .secondary }
+        return Self.seriesPalette[index % Self.seriesPalette.count]
+    }
 
     private enum HistoryRange: String, CaseIterable, Identifiable {
         case today
@@ -581,8 +896,15 @@ private struct HistoryView: View {
             enabledSources.flatMap { source -> [ChartPoint] in
                 guard let w = entry.sources[source.id] else { return [] }
                 var pts: [ChartPoint] = []
-                if let v = w.fiveHour { pts.append(.init(ts: entry.ts, series: "\(source.label) 5h", pct: v, isWeek: false)) }
-                if let v = w.oneWeek  { pts.append(.init(ts: entry.ts, series: "\(source.label) 1w", pct: v, isWeek: true)) }
+                let fiveHKey = "\(source.label) 5h"
+                let oneWKey = "\(source.label) 1w"
+                if !hiddenSeries.contains(fiveHKey), let v = w.fiveHour { pts.append(.init(ts: entry.ts, series: fiveHKey, pct: v, isWeek: false)) }
+                if !hiddenSeries.contains(oneWKey), let v = w.oneWeek { pts.append(.init(ts: entry.ts, series: oneWKey, pct: v, isWeek: true)) }
+                // Extra (model-scoped) windows reset weekly, like 1-week — styled the same.
+                for (name, v) in w.extra ?? [:] {
+                    let key = "\(source.label) \(name)"
+                    if !hiddenSeries.contains(key) { pts.append(.init(ts: entry.ts, series: key, pct: v, isWeek: true)) }
+                }
                 return pts
             }
         }
@@ -670,6 +992,14 @@ private struct HistoryView: View {
                 .help("Show history folder in Finder")
             }
 
+            if !allSeriesNames.isEmpty {
+                SeriesToggleRow(
+                    seriesNames: allSeriesNames,
+                    hidden: $hiddenSeries,
+                    color: color(for:)
+                )
+            }
+
             if isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 200)
@@ -699,6 +1029,7 @@ private struct HistoryView: View {
                         : StrokeStyle(lineWidth: 2))
                     .interpolationMethod(.monotone)
                 }
+                .chartForegroundStyleScale(domain: allSeriesNames, range: allSeriesNames.map(color(for:)))
                 .chartXScale(domain: chartXDomain)
                 .chartYScale(domain: chartYDomain)
                 .chartYAxis {
@@ -843,7 +1174,7 @@ private struct InfoView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Text("Version 1.0")
+            Text("Version 1.1")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

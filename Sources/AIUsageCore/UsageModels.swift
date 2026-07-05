@@ -12,10 +12,15 @@ public struct ProviderUsageWindow: Equatable, Sendable {
     public let resetDescription: String?
     public let resetsAt: Date?
 
-    public init(percentUsed: Int, resetDescription: String?) {
+    /// - Parameter resetsAt: pass the exact reset instant directly when it's
+    ///   already known (e.g. parsed from an ISO 8601 API field), bypassing
+    ///   the fragile text round-trip below. Falls back to text-parsing
+    ///   `resetDescription` when omitted — the only option callers with just
+    ///   a human-readable string (e.g. scraped CLI text) have.
+    public init(percentUsed: Int, resetDescription: String?, resetsAt: Date? = nil) {
         self.percentUsed = min(100, max(0, percentUsed))
         self.resetDescription = resetDescription
-        self.resetsAt = Self.parseResetDate(from: resetDescription)
+        self.resetsAt = resetsAt ?? Self.parseResetDate(from: resetDescription)
     }
 
     // Parses reset description strings like:
@@ -138,6 +143,10 @@ public struct UsageSnapshot: Equatable, Sendable {
     public var errorMessage: String?
     public var fiveHour: ProviderUsageWindow?
     public var oneWeek: ProviderUsageWindow?
+    /// Additional named quota windows some accounts/plans expose beyond the
+    /// standard 5-hour/weekly pair — e.g. a model-scoped weekly limit like
+    /// "Fable" — keyed by their display name. Empty when none are reported.
+    public var extraWindows: [String: ProviderUsageWindow]
 
     public init(
         sourceID: String,
@@ -150,7 +159,8 @@ public struct UsageSnapshot: Equatable, Sendable {
         resetDescription: String? = nil,
         errorMessage: String?,
         fiveHour: ProviderUsageWindow? = nil,
-        oneWeek: ProviderUsageWindow? = nil
+        oneWeek: ProviderUsageWindow? = nil,
+        extraWindows: [String: ProviderUsageWindow] = [:]
     ) {
         self.sourceID = sourceID
         self.label = label
@@ -163,6 +173,7 @@ public struct UsageSnapshot: Equatable, Sendable {
         self.errorMessage = errorMessage
         self.fiveHour = fiveHour
         self.oneWeek = oneWeek
+        self.extraWindows = extraWindows
     }
 
     public static func idle(from config: SourceConfig) -> UsageSnapshot {

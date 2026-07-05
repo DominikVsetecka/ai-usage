@@ -77,14 +77,18 @@ macOS Gatekeeper may block the binary on first run. If you see a security warnin
 ## Features
 
 - **Menu bar** — one value per enabled provider; configurable font size, weight, and color mode (white / dimmed / usage gradient)
-- **Popover** — 5-hour and 1-week quota windows per provider with integrated burn-rate sparkline, percentage, and reset countdown ("Resets in 2 hr 15 min")
-- **Window-scoped sparklines** — burn history is cropped to the active 5-hour or 1-week quota window
+- **Popover** — 5-hour, 1-week, and (where reported) extra model-scoped quota windows per provider, with a configurable "Visual" bar (time-remaining fill + burn history as blocks or a line), percentage, and reset countdown
+- **Per-connection popover controls** — choose which windows (5-hour / 1-week / Extra) appear per source, and how the percent number shows: used vs. remaining override, hidden entirely, or global size/weight
+- **Extra model-scoped quotas** — some plans report a separate weekly cap for a specific model (e.g. a "Fable" limit) alongside the general weekly quota; AI Usage picks these up automatically from the Claude API and shows a row per model — **Secure profile connection only**, not available via the Claude CLI text screen
+- **Window-scoped burn history** — cropped to the active quota window, with hover tooltips showing date, time, and value
 - **Sparkline direction** — ascending (usage rises, default) or descending (quota drops from top)
 - **Local history** — usage logged to `~/.ai-usage/history/YYYY-MM-DD.jsonl` on ≥1% change or every 30 min; 30-day retention
-- **History tab** — line chart with 1-day / 7-day / 30-day picker; "Show in Finder" button opens the history folder
+- **History tab** — line chart with 1-day / 7-day / 30-day picker, per-series toggle chips to declutter multi-connection charts, and a "Show in Finder" button
 - **Secure Claude profiles** — OAuth credentials imported into a separate app-owned Keychain entry; never touches Claude Code's own login
 - **Custom icons** — pick any SVG or PNG per provider via file picker; stored as Base64 in `config.json`; no brand logos are bundled
 - **Configurable refresh** — 15 s / 30 s / 1 min / 2 min / 5 min
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Configuration
 

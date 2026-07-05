@@ -12,10 +12,15 @@ public struct UsageHistoryEntry: Codable, Sendable {
     public struct WindowSnapshot: Codable, Sendable {
         public let fiveHour: Int?
         public let oneWeek: Int?
+        /// Extra named windows (e.g. a model-scoped weekly cap like "Fable"),
+        /// keyed by display name. Nil (not empty) when a source reports none,
+        /// so older history files without this key decode unchanged.
+        public let extra: [String: Int]?
 
-        public init(fiveHour: Int?, oneWeek: Int?) {
+        public init(fiveHour: Int?, oneWeek: Int?, extra: [String: Int]? = nil) {
             self.fiveHour = fiveHour
             self.oneWeek = oneWeek
+            self.extra = extra
         }
     }
 }
@@ -39,14 +44,12 @@ public actor UsageHistoryStore {
         var anyChanged = false
 
         for snap in enabled {
-            let new = UsageHistoryEntry.WindowSnapshot(
-                fiveHour: snap.fiveHour?.percentUsed,
-                oneWeek: snap.oneWeek?.percentUsed
-            )
+            let new = Self.windowSnapshot(for: snap)
             if let last = lastRecorded[snap.sourceID] {
                 let fhDiff = abs((new.fiveHour ?? -1) - (last.fiveHour ?? -1))
                 let owDiff = abs((new.oneWeek ?? -1) - (last.oneWeek ?? -1))
-                if fhDiff >= changeThreshold || owDiff >= changeThreshold {
+                let extraChanged = (new.extra ?? [:]) != (last.extra ?? [:])
+                if fhDiff >= changeThreshold || owDiff >= changeThreshold || extraChanged {
                     anyChanged = true
                 }
             } else {
@@ -62,14 +65,19 @@ public actor UsageHistoryStore {
         let entry = UsageHistoryEntry(
             ts: now,
             sources: Dictionary(uniqueKeysWithValues: enabled.map { snap in
-                (snap.sourceID, UsageHistoryEntry.WindowSnapshot(
-                    fiveHour: snap.fiveHour?.percentUsed,
-                    oneWeek: snap.oneWeek?.percentUsed
-                ))
+                (snap.sourceID, Self.windowSnapshot(for: snap))
             })
         )
         try? append(entry: entry, date: now)
         cleanOldFiles(relativeTo: now)
+    }
+
+    private static func windowSnapshot(for snap: UsageSnapshot) -> UsageHistoryEntry.WindowSnapshot {
+        UsageHistoryEntry.WindowSnapshot(
+            fiveHour: snap.fiveHour?.percentUsed,
+            oneWeek: snap.oneWeek?.percentUsed,
+            extra: snap.extraWindows.isEmpty ? nil : snap.extraWindows.mapValues(\.percentUsed)
+        )
     }
 
     public func load(days: Int = 1, now: Date = Date()) -> [UsageHistoryEntry] {

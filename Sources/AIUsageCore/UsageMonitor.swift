@@ -41,6 +41,7 @@ public final class UsageMonitor {
                         if merged.resetDescription == nil { merged.resetDescription = previous.resetDescription }
                         if merged.fiveHour == nil { merged.fiveHour = previous.fiveHour }
                         if merged.oneWeek == nil { merged.oneWeek = previous.oneWeek }
+                        if merged.extraWindows.isEmpty { merged.extraWindows = previous.extraWindows }
                         snapshots[index] = merged
                     } else {
                         snapshots[index] = snapshot

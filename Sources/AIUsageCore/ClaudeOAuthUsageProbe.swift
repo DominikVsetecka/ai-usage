@@ -125,7 +125,28 @@ public actor ClaudeOAuthUsageService {
         guard session != nil || weekly != nil else {
             throw ClaudeOAuthUsageError.invalidResponse
         }
-        return ClaudeUsageResult(session: session, weekly: weekly)
+        return ClaudeUsageResult(session: session, weekly: weekly, extra: extraWindows(from: payload.limits))
+    }
+
+    // Model-scoped extra limits (e.g. a "Fable" weekly cap) show up as generic
+    // entries in the `limits` array rather than named top-level fields — any
+    // entry with `scope.model.display_name` set is one of these, keyed by
+    // that display name so newly added models pick up automatically.
+    private static func extraWindows(from limits: [LimitPayload]?) -> [String: ProviderUsageWindow] {
+        guard let limits else { return [:] }
+        var result: [String: ProviderUsageWindow] = [:]
+        for limit in limits {
+            guard let name = limit.scope?.model?.displayName?.trimmingCharacters(in: .whitespaces),
+                  !name.isEmpty,
+                  let percent = limit.percent else { continue }
+            let resetsAt = parseISODate(limit.resetsAt)
+            result[name] = ProviderUsageWindow(
+                percentUsed: percent,
+                resetDescription: resetDescription(resetsAt),
+                resetsAt: resetsAt
+            )
+        }
+        return result
     }
 
     private func usageResponse(accessToken: String) async throws -> HTTPResult {
@@ -200,20 +221,29 @@ public actor ClaudeOAuthUsageService {
     private static func makeWindow(_ payload: UsageWindowPayload) -> ProviderUsageWindow? {
         guard let utilization = payload.utilization else { return nil }
         let percent = min(100, max(0, Int(utilization.rounded())))
+        let resetsAt = parseISODate(payload.resetsAt)
         return ProviderUsageWindow(
             percentUsed: percent,
-            resetDescription: resetDescription(payload.resetsAt)
+            resetDescription: resetDescription(resetsAt),
+            resetsAt: resetsAt
         )
     }
 
-    private static func resetDescription(_ raw: String?) -> String? {
+    // The API returns exact ISO 8601 instants — parse those directly rather
+    // than formatting to locale text and re-parsing it back (which silently
+    // failed on any non-English-month locale, since the text parser only
+    // understands English month abbreviations).
+    private static func parseISODate(_ raw: String?) -> Date? {
         guard let raw else { return nil }
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let basic = ISO8601DateFormatter()
         basic.formatOptions = [.withInternetDateTime]
-        guard let date = fractional.date(from: raw) ?? basic.date(from: raw) else { return nil }
+        return fractional.date(from: raw) ?? basic.date(from: raw)
+    }
 
+    private static func resetDescription(_ date: Date?) -> String? {
+        guard let date else { return nil }
         let formatter = DateFormatter()
         formatter.locale = .current
         formatter.dateStyle = Calendar.current.isDateInToday(date) ? .none : .medium
@@ -267,7 +297,8 @@ public struct ClaudeOAuthUsageProbe: UsageProbing {
                 resetDescription: selected.resetDescription,
                 errorMessage: nil,
                 fiveHour: result.session,
-                oneWeek: result.weekly
+                oneWeek: result.weekly,
+                extraWindows: result.extra
             )
         } catch {
             return failure(error.localizedDescription)
@@ -308,10 +339,39 @@ public enum ClaudeOAuthUsageError: LocalizedError, Equatable {
 private struct UsagePayload: Decodable {
     let fiveHour: UsageWindowPayload?
     let sevenDay: UsageWindowPayload?
+    let limits: [LimitPayload]?
 
     enum CodingKeys: String, CodingKey {
         case fiveHour = "five_hour"
         case sevenDay = "seven_day"
+        case limits
+    }
+}
+
+// A generic entry from the `limits` array. Most entries are the plain
+// session/weekly_all windows already covered by five_hour/seven_day; entries
+// with a `scope.model` are model-specific extras (e.g. "Fable").
+private struct LimitPayload: Decodable {
+    let percent: Int?
+    let resetsAt: String?
+    let scope: LimitScopePayload?
+
+    enum CodingKeys: String, CodingKey {
+        case percent
+        case resetsAt = "resets_at"
+        case scope
+    }
+}
+
+private struct LimitScopePayload: Decodable {
+    let model: LimitModelScopePayload?
+}
+
+private struct LimitModelScopePayload: Decodable {
+    let displayName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case displayName = "display_name"
     }
 }
 
