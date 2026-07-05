@@ -2,10 +2,6 @@
 
 A lightweight macOS menu bar app that shows your Claude and Codex quota at a glance.
 
-```
-C1 43%  GPT 12%
-```
-
 Click the menu bar item to open a popover with per-provider details, burn-rate sparklines, and reset countdowns.
 
 <div align="center">
