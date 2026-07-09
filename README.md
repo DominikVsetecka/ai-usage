@@ -73,7 +73,8 @@ If you do copy the built binary to another Mac (e.g. via a network share), that 
 - **Popover** — 5-hour, 1-week, and (where reported) extra model-scoped quota windows per provider, with a configurable "Visual" bar (time-remaining fill + burn history as blocks or a line), percentage, and reset countdown
 - **Per-connection popover controls** — choose which windows (5-hour / 1-week / Extra) appear per source, and how the percent number shows: used vs. remaining override, hidden entirely, or global size/weight
 - **Extra model-scoped quotas** — some plans report a separate weekly cap for a specific model (e.g. a "Fable" limit) alongside the general weekly quota; AI Usage picks these up automatically from the Claude API and shows a row per model — **Secure profile connection only**, not available via the Claude CLI text screen
-- **Window-scoped burn history** — cropped to the active quota window, with hover tooltips showing date, time, and value
+- **Window-scoped burn history** — cropped to the active quota window, with hover tooltips showing date, time, and value; optional styling to merge unchanged blocks, round the step corners, or connect steps into one smooth curve
+- **Pace estimate** — optional "≈Xh Ym left at this pace" next to the 5-hour reset, projected from the burn rate since the last reset; can be limited to only when it'd run out before the reset, or always shown
 - **Sparkline direction** — ascending (usage rises, default) or descending (quota drops from top)
 - **Local history** — usage logged to `~/.ai-usage/history/YYYY-MM-DD.jsonl` on ≥1% change or every 30 min; 30-day retention
 - **History tab** — line chart with 1-day / 7-day / 30-day picker, per-series toggle chips to declutter multi-connection charts, and a "Show in Finder" button

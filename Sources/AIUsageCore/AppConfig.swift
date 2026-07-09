@@ -14,6 +14,11 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var visualHistoryDarken: Double?
     public var popoverPercentFontSize: CGFloat?
     public var popoverPercentFontWeight: String?
+    public var showUsageEstimate: Bool?
+    public var alwaysShowUsageEstimate: Bool?
+    public var mergeUnchangedHistoryBlocks: Bool?
+    public var roundedHistorySteps: Bool?
+    public var connectedHistorySteps: Bool?
     public var sources: [SourceConfig]
 
     public init(
@@ -30,6 +35,11 @@ public struct AppConfig: Codable, Equatable, Sendable {
         visualHistoryDarken: Double? = nil,
         popoverPercentFontSize: CGFloat? = nil,
         popoverPercentFontWeight: String? = nil,
+        showUsageEstimate: Bool? = nil,
+        alwaysShowUsageEstimate: Bool? = nil,
+        mergeUnchangedHistoryBlocks: Bool? = nil,
+        roundedHistorySteps: Bool? = nil,
+        connectedHistorySteps: Bool? = nil,
         sources: [SourceConfig]
     ) {
         self.refreshIntervalSeconds = max(5, refreshIntervalSeconds)
@@ -45,6 +55,11 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.visualHistoryDarken = visualHistoryDarken
         self.popoverPercentFontSize = popoverPercentFontSize
         self.popoverPercentFontWeight = popoverPercentFontWeight
+        self.showUsageEstimate = showUsageEstimate
+        self.alwaysShowUsageEstimate = alwaysShowUsageEstimate
+        self.mergeUnchangedHistoryBlocks = mergeUnchangedHistoryBlocks
+        self.roundedHistorySteps = roundedHistorySteps
+        self.connectedHistorySteps = connectedHistorySteps
         self.sources = sources
     }
 
@@ -62,6 +77,26 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public var resolvedVisualHistoryStyle: VisualHistoryStyle {
         visualHistoryStyle ?? .bars
+    }
+
+    public var resolvedShowUsageEstimate: Bool {
+        showUsageEstimate ?? true
+    }
+
+    public var resolvedAlwaysShowUsageEstimate: Bool {
+        alwaysShowUsageEstimate ?? false
+    }
+
+    public var resolvedMergeUnchangedHistoryBlocks: Bool {
+        mergeUnchangedHistoryBlocks ?? false
+    }
+
+    public var resolvedRoundedHistorySteps: Bool {
+        roundedHistorySteps ?? false
+    }
+
+    public var resolvedConnectedHistorySteps: Bool {
+        connectedHistorySteps ?? false
     }
 
     public static let visualBarHeightRange: ClosedRange<CGFloat> = 8...56

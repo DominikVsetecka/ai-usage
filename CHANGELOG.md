@@ -2,6 +2,13 @@
 
 All notable changes to AI Usage are documented in this file.
 
+## 1.3 — 2026-07-10
+
+### Added
+
+- Popover history styling options: merge consecutive blocks with unchanged usage into one continuous block, round the step corners, or connect steps into one smooth outline with no gaps — flat-tangent curves between value changes, with the boundary between the remaining-time fill and the newest history entry left flat since that's a mode change, not a value transition.
+- "Always show pace estimate" setting: the burn-rate estimate next to the 5-hour reset can now optionally always be shown, instead of only when it would run out before the reset.
+
 ## 1.2 — 2026-07-09
 
 ### Added

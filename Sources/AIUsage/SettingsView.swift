@@ -127,6 +127,15 @@ struct SettingsView: View {
                             }
                         }
                         .pickerStyle(.segmented)
+
+                        Toggle("Merge unchanged history blocks", isOn: mergeUnchangedHistoryBlocksBinding)
+                            .help("Draw consecutive blocks with the same recorded percent as one connected block instead of separate ones with gaps.")
+
+                        Toggle("Rounded history steps", isOn: roundedHistoryStepsBinding)
+                            .help("Softer, more rounded top corners on each history block, so jumps between different values look less sharp.")
+
+                        Toggle("Connect history steps", isOn: connectedHistoryStepsBinding)
+                            .help("No gaps between blocks at all — they connect smoothly, and each entry's brightness restarts lighter at its own start so individual updates stay visible.")
                     }
 
                     LabeledContent("History darkness") {
@@ -171,6 +180,14 @@ struct SettingsView: View {
                         Text("Bold").tag("bold")
                     }
                     .pickerStyle(.menu)
+
+                    Toggle("Show pace estimate on 5-hour window", isOn: showUsageEstimateBinding)
+                        .help("\"≈Xh Ym left at this pace\" next to the reset time, projected from the burn rate since the last reset. Only appears once there's enough data and only if you'd run out before the reset.")
+
+                    if draft.resolvedShowUsageEstimate {
+                        Toggle("Always show pace estimate", isOn: alwaysShowUsageEstimateBinding)
+                            .help("Show the estimate even when you're on track to reset before running out — normally it only appears when the pace would run out before the reset.")
+                    }
                 } header: {
                     Text("Popover")
                 } footer: {
@@ -218,6 +235,27 @@ struct SettingsView: View {
         )
     }
 
+    private var mergeUnchangedHistoryBlocksBinding: Binding<Bool> {
+        Binding(
+            get: { draft.resolvedMergeUnchangedHistoryBlocks },
+            set: { draft.mergeUnchangedHistoryBlocks = $0 }
+        )
+    }
+
+    private var roundedHistoryStepsBinding: Binding<Bool> {
+        Binding(
+            get: { draft.resolvedRoundedHistorySteps },
+            set: { draft.roundedHistorySteps = $0 }
+        )
+    }
+
+    private var connectedHistoryStepsBinding: Binding<Bool> {
+        Binding(
+            get: { draft.resolvedConnectedHistorySteps },
+            set: { draft.connectedHistorySteps = $0 }
+        )
+    }
+
     private var visualBarHeightBinding: Binding<CGFloat> {
         Binding(
             get: { draft.resolvedVisualBarHeight },
@@ -250,6 +288,20 @@ struct SettingsView: View {
         Binding(
             get: { draft.popoverPercentFontWeight ?? "semibold" },
             set: { draft.popoverPercentFontWeight = $0 == "semibold" ? nil : $0 }
+        )
+    }
+
+    private var showUsageEstimateBinding: Binding<Bool> {
+        Binding(
+            get: { draft.resolvedShowUsageEstimate },
+            set: { draft.showUsageEstimate = $0 }
+        )
+    }
+
+    private var alwaysShowUsageEstimateBinding: Binding<Bool> {
+        Binding(
+            get: { draft.resolvedAlwaysShowUsageEstimate },
+            set: { draft.alwaysShowUsageEstimate = $0 }
         )
     }
 
@@ -324,6 +376,9 @@ private struct VisualBarPreviewRow: View {
                     historyStyle: config.resolvedVisualHistoryStyle,
                     barHeight: config.resolvedVisualBarHeight,
                     historyDarken: config.resolvedVisualHistoryDarken,
+                    mergeUnchangedHistory: config.resolvedMergeUnchangedHistoryBlocks,
+                    roundedHistorySteps: config.resolvedRoundedHistorySteps,
+                    connectedHistorySteps: config.resolvedConnectedHistorySteps,
                     cycleRemainingFrac: Self.demoCycleRemainingFrac
                 )
 
@@ -1204,7 +1259,7 @@ private struct InfoView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Text("Version 1.2")
+            Text("Version 1.3")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

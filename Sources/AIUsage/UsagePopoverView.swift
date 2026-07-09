@@ -242,32 +242,21 @@ private struct ProviderDetailSection: View {
         let points = sparkPoints
             .filter { $0.ts >= windowStart && $0.ts <= now }
             .compactMap { sp in
-                value(sp).map { BurnPoint(id: sp.ts, ts: sp.ts, pct: $0) }
+                value(sp).map { (ts: sp.ts, pct: $0) }
             }
-        return Self.trimToCurrentCycle(points)
-    }
-
-    /// Usage within a cycle only ever climbs, so a meaningful drop marks a
-    /// reset. Keep only samples since the most recent reset — everything
-    /// before it belongs to a previous cycle (or is stale/buggy data), so the
-    /// window always starts fresh (≈100% remaining) instead of carrying it over.
-    private static func trimToCurrentCycle(_ points: [BurnPoint], resetDrop: Int = 10) -> [BurnPoint] {
-        guard points.count > 1 else { return points }
-        var startIndex = 0
-        for i in 1..<points.count where points[i - 1].pct - points[i].pct >= resetDrop {
-            startIndex = i
-        }
-        return Array(points[startIndex...])
+        return HistoryTrimmer.trimToCurrentCycle(points).map { BurnPoint(id: $0.ts, ts: $0.ts, pct: $0.pct) }
     }
 
     // "How long can I keep working at this pace" for the 5-hour window —
     // see UsageEstimator for the actual projection logic.
     private var fiveHourEstimate: String? {
+        guard config.resolvedShowUsageEstimate else { return nil }
         guard let window = snapshot.fiveHour, let resetsAt = window.resetsAt else { return nil }
         guard let seconds = UsageEstimator.timeUntilExhausted(
             points: fiveHourBurn.map { ($0.ts, $0.pct) },
             currentPct: window.percentUsed,
-            resetsAt: resetsAt
+            resetsAt: resetsAt,
+            onlyIfBeforeReset: !config.resolvedAlwaysShowUsageEstimate
         ) else { return nil }
         return "≈\(Self.formatDuration(seconds)) left at this pace"
     }
@@ -303,6 +292,9 @@ private struct ProviderDetailSection: View {
                     historyStyle: config.resolvedVisualHistoryStyle,
                     barHeight: config.resolvedVisualBarHeight,
                     historyDarken: config.resolvedVisualHistoryDarken,
+                    mergeUnchangedHistory: config.resolvedMergeUnchangedHistoryBlocks,
+                    roundedHistorySteps: config.resolvedRoundedHistorySteps,
+                    connectedHistorySteps: config.resolvedConnectedHistorySteps,
                     showPercent: source?.resolvedShowPercentInPopover ?? true,
                     percentFontSize: config.resolvedPopoverPercentFontSize,
                     percentFontWeight: config.popoverPercentFontWeight,
@@ -323,6 +315,9 @@ private struct ProviderDetailSection: View {
                     historyStyle: config.resolvedVisualHistoryStyle,
                     barHeight: config.resolvedVisualBarHeight,
                     historyDarken: config.resolvedVisualHistoryDarken,
+                    mergeUnchangedHistory: config.resolvedMergeUnchangedHistoryBlocks,
+                    roundedHistorySteps: config.resolvedRoundedHistorySteps,
+                    connectedHistorySteps: config.resolvedConnectedHistorySteps,
                     showPercent: source?.resolvedShowPercentInPopover ?? true,
                     percentFontSize: config.resolvedPopoverPercentFontSize,
                     percentFontWeight: config.popoverPercentFontWeight,
@@ -344,6 +339,9 @@ private struct ProviderDetailSection: View {
                         historyStyle: config.resolvedVisualHistoryStyle,
                         barHeight: config.resolvedVisualBarHeight,
                         historyDarken: config.resolvedVisualHistoryDarken,
+                    mergeUnchangedHistory: config.resolvedMergeUnchangedHistoryBlocks,
+                    roundedHistorySteps: config.resolvedRoundedHistorySteps,
+                    connectedHistorySteps: config.resolvedConnectedHistorySteps,
                         showPercent: source?.resolvedShowPercentInPopover ?? true,
                         percentFontSize: config.resolvedPopoverPercentFontSize,
                         percentFontWeight: config.popoverPercentFontWeight,
@@ -400,6 +398,9 @@ private struct WindowRow: View {
     var historyStyle: VisualHistoryStyle = .bars
     var barHeight: CGFloat = 30
     var historyDarken: Double = 10
+    var mergeUnchangedHistory: Bool = false
+    var roundedHistorySteps: Bool = false
+    var connectedHistorySteps: Bool = false
     var showPercent: Bool = true
     var percentFontSize: CGFloat = 12
     var percentFontWeight: String? = nil
@@ -442,6 +443,9 @@ private struct WindowRow: View {
                         historyStyle: historyStyle,
                         barHeight: barHeight,
                         historyDarken: historyDarken,
+                        mergeUnchangedHistory: mergeUnchangedHistory,
+                        roundedHistorySteps: roundedHistorySteps,
+                        connectedHistorySteps: connectedHistorySteps,
                         cycleRemainingFrac: cycleRemainingFrac(for: window)
                     )
 
@@ -528,12 +532,22 @@ struct VisualBurnBarView: View {
     var historyStyle: VisualHistoryStyle = .bars
     var barHeight: CGFloat = 30
     var historyDarken: Double = 10
+    var mergeUnchangedHistory: Bool = false
+    var roundedHistorySteps: Bool = false
+    var connectedHistorySteps: Bool = false
     var cycleRemainingFrac: CGFloat = 0
 
     /// 1.0 = full brightness, lower = darker. Applied to the history
     /// bars/line so they read as a step back from the remaining-time fill.
     private var historyOpacityScale: CGFloat {
         CGFloat(1 - min(100, max(0, historyDarken)) / 100)
+    }
+
+    /// "Connected" means no gaps at all — used consistently for sampling,
+    /// hit-testing and drawing so the visible blocks and the hover target
+    /// always agree (a mismatch here previously caused a hover bug).
+    private var effectiveGap: CGFloat {
+        connectedHistorySteps ? 0 : blockWidth.metrics.gap
     }
 
     @State private var hoveredPoint: BurnPoint? = nil
@@ -556,7 +570,15 @@ struct VisualBurnBarView: View {
     // with what's on screen (an exact-index match instead of a fuzzy nearest-
     // timestamp search, which used to miss most of the down-sampled bars).
     private func displayPoints(width: CGFloat) -> [BurnPoint] {
-        sampledForDisplay(burnPoints, width: width, targetWidth: blockWidth.metrics.width, gap: blockWidth.metrics.gap)
+        sampledForDisplay(burnPoints, width: width, targetWidth: effectiveTargetWidth, gap: effectiveGap)
+    }
+
+    // Narrow/Medium blocks (3-4pt) are too thin for a height-transition curve
+    // to read as smooth — there's only ~1-2pt per side to bend in, which is
+    // visually indistinguishable from a sharp corner. Connected mode forces
+    // wider entries so the junction curves have room to actually show.
+    private var effectiveTargetWidth: CGFloat {
+        connectedHistorySteps ? max(blockWidth.metrics.width, 10) : blockWidth.metrics.width
     }
 
     private func barWidth(forCount n: Int, width: CGFloat, gap: CGFloat) -> CGFloat {
@@ -619,9 +641,12 @@ struct VisualBurnBarView: View {
                     switch historyStyle {
                     case .bars:
                         let pts = displayPoints(width: region.width)
-                        let gap = blockWidth.metrics.gap
+                        let gap = effectiveGap
+                        let merge = mergeUnchangedHistory
+                        let rounded = roundedHistorySteps
+                        let connected = connectedHistorySteps
                         Canvas { ctx, size in
-                            drawVisualBars(ctx: ctx, size: size, points: pts, color: col, direction: dir, hovered: hv, gap: gap, opacityScale: darken)
+                            drawVisualBars(ctx: ctx, size: size, points: pts, color: col, direction: dir, hovered: hv, gap: gap, opacityScale: darken, mergeUnchanged: merge, rounded: rounded, connected: connected)
                         }
                         .frame(width: region.width, height: H)
                         .offset(x: region.offX)
@@ -652,7 +677,7 @@ struct VisualBurnBarView: View {
                     case .bars:
                         let localX = loc.x - region.offX
                         let pts = displayPoints(width: region.width)
-                        let gap = blockWidth.metrics.gap
+                        let gap = effectiveGap
                         let bw = barWidth(forCount: pts.count, width: region.width, gap: gap)
                         if (0...region.width).contains(localX), !pts.isEmpty, bw > 0,
                            let idx = nearestIndex(at: localX, count: pts.count, barWidth: bw, gap: gap, width: region.width) {
@@ -773,30 +798,130 @@ private func drawVisualBars(
     ctx: GraphicsContext, size: CGSize,
     points: [BurnPoint], color: Color,
     direction: SparklineDirection, hovered: BurnPoint?,
-    gap: CGFloat, opacityScale: CGFloat = 1
+    gap: CGFloat, opacityScale: CGFloat = 1,
+    mergeUnchanged: Bool = false,
+    rounded: Bool = false,
+    connected: Bool = false
 ) {
     guard points.count >= 1, size.width > 2 else { return }
     let n = points.count
     let barWidth = max(2, (size.width - CGFloat(n - 1) * gap) / CGFloat(n))
-    let radius = min(barWidth / 2, 2)
+    // Top corners only (flat against the baseline) — with gap = 0 (Narrow, or
+    // "Connected"), rounding all four corners would notch the touching
+    // bottom edges; top-only keeps them flush while still softening the top.
+    let radius: CGFloat = rounded ? min(barWidth / 2, 6) : min(barWidth / 2, 2)
+    // How far each side of a junction the smoothstep curve reaches when steps
+    // are connected — independent of "rounded", since this is a curve
+    // between two heights, not a corner radius.
+    let junctionSpan: CGFloat = min(barWidth, 10)
+    // Newest sample sits at the left edge; index n-1 is leftmost, index 0 is
+    // rightmost — consecutive indices are always spatially adjacent slots.
+    func leftEdge(_ index: Int) -> CGFloat {
+        size.width - CGFloat(index + 1) * barWidth - CGFloat(index) * gap
+    }
 
-    for (index, point) in points.enumerated() {
-        let displayPct = direction == .descending ? 100 - point.pct : point.pct
+    // Group consecutive points that share the same recorded percent, so a
+    // flat (unchanged) stretch draws as one merged block instead of many
+    // identical bars with gaps between them.
+    let groups: [(range: ClosedRange<Int>, pct: Int)] = mergeUnchanged
+        ? HistoryBlockMerger.mergedGroups(pcts: points.map(\.pct))
+        : points.enumerated().map { (index, point) in (range: index...index, pct: point.pct) }
+
+    struct GroupInfo { let rect: CGRect; let isNewest: Bool; let isHovered: Bool }
+
+    // Chronological order (oldest first) — matches `groups`.
+    let chronological: [GroupInfo] = groups.map { group in
+        let firstIndex = group.range.lowerBound  // rightmost slot in the group
+        let lastIndex = group.range.upperBound   // leftmost slot in the group
+        let left = leftEdge(lastIndex)
+        let right = leftEdge(firstIndex) + barWidth
+        let displayPct = direction == .descending ? 100 - group.pct : group.pct
         let clamped = CGFloat(max(0, min(100, displayPct)))
         let barHeight = max(3, size.height * clamped / 100)
-        // Newest sample sits at the left edge; grows up from the bottom.
-        let x = size.width - CGFloat(index + 1) * barWidth - CGFloat(index) * gap
         let y = size.height - barHeight
-        // Points are drawn straight from displayPoints(width:), the same
-        // array the hover hit-test indexes into — exact equality is safe.
-        let isHovered = hovered.map { $0.ts == point.ts } ?? false
-        // Full brightness at 0.95/0.8, scaled down by the darken setting
-        // (defaults to ~10% darker than the remaining-time fill).
-        let baseOpacity: CGFloat = index == n - 1 ? 0.95 : 0.8
-        let opacity = isHovered ? 1.0 : baseOpacity * opacityScale
-        ctx.fill(
-            Path(roundedRect: CGRect(x: x, y: y, width: barWidth, height: barHeight), cornerRadius: radius),
-            with: .color(color.opacity(opacity))
+        let isHovered = hovered.map { hv in group.range.contains { points[$0].ts == hv.ts } } ?? false
+        return GroupInfo(rect: CGRect(x: left, y: y, width: right - left, height: barHeight), isNewest: lastIndex == n - 1, isHovered: isHovered)
+    }
+
+    if connected {
+        // Reversing to spatial left-to-right order lets the path walk
+        // forward only (via "next"), which is what avoids the earlier
+        // left/right mix-up entirely instead of re-deriving it per side.
+        let spatial = Array(chronological.reversed())
+        let path = smoothStepHistoryPath(rects: spatial.map(\.rect), baselineY: size.height, junctionSpan: junctionSpan, outerRadius: radius)
+
+        // One continuous outline, one flat fill — no per-entry brightness
+        // pulse, just the smooth connected shape itself.
+        let opacity: CGFloat = 0.8 * opacityScale
+        ctx.fill(path, with: .color(color.opacity(opacity)))
+
+        // Hover still gets a highlight, since the crosshair line alone is
+        // easy to miss against a flat fill — a brighter patch over just the
+        // hovered entry's own width.
+        if let hoveredInfo = spatial.first(where: \.isHovered) {
+            ctx.fill(Path(hoveredInfo.rect), with: .color(color.opacity(1.0)))
+        }
+    } else {
+        for info in chronological {
+            let baseOpacity: CGFloat = info.isNewest ? 0.95 : 0.8
+            let opacity = info.isHovered ? 1.0 : baseOpacity * opacityScale
+            ctx.fill(topRoundedPath(info.rect, radius: radius), with: .color(color.opacity(opacity)))
+        }
+    }
+}
+
+/// One continuous top contour across the whole connected history band, in
+/// spatial left-to-right order. Every junction between two differently-tall
+/// neighbors is a cubic "smoothstep" — flat tangent at both ends, so there's
+/// no vertical wall anywhere and no sharp corner, just a soft S-bend. Only
+/// walking "next" (never "previous") is what keeps left/right unambiguous.
+private func smoothStepHistoryPath(rects: [CGRect], baselineY: CGFloat, junctionSpan: CGFloat, outerRadius: CGFloat) -> Path {
+    guard let first = rects.first else { return Path() }
+    var path = Path()
+    path.move(to: CGPoint(x: first.minX, y: baselineY))
+
+    // The newest entry's left edge butts directly against the remaining-time
+    // fill — that boundary is a mode change (now vs. history), not a value
+    // transition between two history entries, so it stays a plain flat edge
+    // with no rounding or curve at all.
+    path.addLine(to: CGPoint(x: first.minX, y: first.minY))
+
+    for i in 0..<rects.count {
+        let g = rects[i]
+        guard i + 1 < rects.count else {
+            let r = min(outerRadius, g.width / 2, g.height)
+            path.addLine(to: CGPoint(x: g.maxX - r, y: g.minY))
+            path.addQuadCurve(to: CGPoint(x: g.maxX, y: g.minY + r), control: CGPoint(x: g.maxX, y: g.minY))
+            break
+        }
+        let next = rects[i + 1]
+        let span = min(junctionSpan, g.width / 2, next.width / 2)
+        path.addLine(to: CGPoint(x: g.maxX - span, y: g.minY))
+        path.addCurve(
+            to: CGPoint(x: g.maxX + span, y: next.minY),
+            control1: CGPoint(x: g.maxX - span / 2, y: g.minY),
+            control2: CGPoint(x: g.maxX + span / 2, y: next.minY)
         )
     }
+
+    path.addLine(to: CGPoint(x: rects.last!.maxX, y: baselineY))
+    path.closeSubpath()
+    return path
+}
+
+/// A rect rounded only on its top two corners — bottom stays flat against
+/// the baseline, so touching blocks (gap = 0) never show a notch where
+/// rounded bottom corners would otherwise fail to meet.
+private func topRoundedPath(_ rect: CGRect, radius: CGFloat) -> Path {
+    let r = max(0, min(radius, rect.width / 2, rect.height))
+    guard r > 0 else { return Path(rect) }
+    var path = Path()
+    path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+    path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
+    path.addQuadCurve(to: CGPoint(x: rect.minX + r, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+    path.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+    path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + r), control: CGPoint(x: rect.maxX, y: rect.minY))
+    path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+    path.closeSubpath()
+    return path
 }

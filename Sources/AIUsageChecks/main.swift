@@ -408,6 +408,18 @@ let resetWinsEstimate = UsageEstimator.timeUntilExhausted(
 )
 check(resetWinsEstimate == nil, "estimator should stay silent when the reset would come before exhaustion")
 
+// Same reset-wins scenario, but with onlyIfBeforeReset disabled (the "always
+// show" setting) — the projection should still be returned even though the
+// reset would come first.
+let alwaysShowEstimate = UsageEstimator.timeUntilExhausted(
+    points: steadyBurnPoints, currentPct: 40, resetsAt: estimatorNow.addingTimeInterval(5 * 60), now: estimatorNow,
+    onlyIfBeforeReset: false
+)
+check(alwaysShowEstimate != nil, "estimator with onlyIfBeforeReset=false should still project even when reset comes first")
+if let alwaysShowEstimate {
+    check(abs(alwaysShowEstimate - 90 * 60) < 60, "estimator with onlyIfBeforeReset=false should project the same ~90 minutes, got \(alwaysShowEstimate)s")
+}
+
 // Too little elapsed time (5 min) since the first sample — not enough signal yet.
 let tooEarlyPoints: [(ts: Date, pct: Int)] = [
     (estimatorNow.addingTimeInterval(-5 * 60), 20),
@@ -427,5 +439,59 @@ let flatEstimate = UsageEstimator.timeUntilExhausted(
     points: flatPoints, currentPct: 40, resetsAt: estimatorReset, now: estimatorNow
 )
 check(flatEstimate == nil, "estimator should return nil for flat/no-progress usage instead of dividing by zero")
+
+// HistoryTrimmer: a cycle can reset while usage was still low, so a reset
+// might only produce a small drop — this must still be detected as a reset,
+// not glued onto the new cycle as leftover history from the old one. Uses
+// the exact real-world numbers that surfaced the bug: a cycle ending at 9%
+// resets to 0%, then climbs to 17% — the drop is only 9, below the old flat
+// "10" threshold.
+let trimmerBase = Date(timeIntervalSince1970: 1_800_000_000)
+let smallDropResetPoints: [(ts: Date, pct: Int)] = [
+    (trimmerBase, 0),
+    (trimmerBase.addingTimeInterval(600), 9),      // end of old cycle
+    (trimmerBase.addingTimeInterval(1200), 0),      // reset (drop of only 9)
+    (trimmerBase.addingTimeInterval(1800), 1),
+    (trimmerBase.addingTimeInterval(2400), 10),
+    (trimmerBase.addingTimeInterval(3000), 17)
+]
+let trimmedSmallDropReset = HistoryTrimmer.trimToCurrentCycle(smallDropResetPoints)
+check(trimmedSmallDropReset.count == 4, "trimmer should drop the previous cycle's tail even when the reset drop is smaller than the old flat threshold")
+check(trimmedSmallDropReset.first?.pct == 0, "trimmed history should start at the reset (0%), not the old cycle's 9%")
+
+// A same-cycle wobble (±1 read noise) must not be mistaken for a reset —
+// it never lands near zero.
+let noisyPoints: [(ts: Date, pct: Int)] = [
+    (trimmerBase, 30),
+    (trimmerBase.addingTimeInterval(600), 33),
+    (trimmerBase.addingTimeInterval(1200), 32),    // -1 wobble, not a reset
+    (trimmerBase.addingTimeInterval(1800), 35)
+]
+let trimmedNoisy = HistoryTrimmer.trimToCurrentCycle(noisyPoints)
+check(trimmedNoisy.count == 4, "trimmer should not mistake a small same-cycle wobble for a reset")
+
+// A genuine large drop (the common case) must still be caught.
+let bigDropPoints: [(ts: Date, pct: Int)] = [
+    (trimmerBase, 37),
+    (trimmerBase.addingTimeInterval(600), 0),
+    (trimmerBase.addingTimeInterval(1200), 5)
+]
+let trimmedBigDrop = HistoryTrimmer.trimToCurrentCycle(bigDropPoints)
+check(trimmedBigDrop.count == 2, "trimmer should still catch a large drop as a reset")
+
+// HistoryBlockMerger: consecutive equal-percent samples merge into one
+// group; a change in value always starts a new group.
+let mergedFlatRun = HistoryBlockMerger.mergedGroups(pcts: [4, 4, 4, 9, 15, 15, 22])
+check(mergedFlatRun.count == 4, "merger should collapse each flat run into a single group")
+check(mergedFlatRun[0].range == 0...2 && mergedFlatRun[0].pct == 4, "first group should span the three leading 4%% samples")
+check(mergedFlatRun[1].range == 3...3 && mergedFlatRun[1].pct == 9, "a lone changed value should form its own single-index group")
+check(mergedFlatRun[2].range == 4...5 && mergedFlatRun[2].pct == 15, "second flat run should span its two samples")
+check(mergedFlatRun[3].range == 6...6 && mergedFlatRun[3].pct == 22, "trailing single value should form its own group")
+
+let mergedNoRepeats = HistoryBlockMerger.mergedGroups(pcts: [1, 2, 3])
+check(mergedNoRepeats.count == 3, "merger should leave all-distinct values as separate single-index groups")
+
+let mergedEmpty = HistoryBlockMerger.mergedGroups(pcts: [])
+check(mergedEmpty.isEmpty, "merger should return no groups for empty input")
 
 print("AIUsageChecks passed")
