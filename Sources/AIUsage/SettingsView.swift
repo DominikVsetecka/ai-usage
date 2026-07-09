@@ -452,6 +452,32 @@ private struct ProviderSettingsSection: View {
                     .foregroundStyle(.secondary)
             }
 
+            if isClaude {
+                LabeledContent("Verify usage") {
+                    Button {
+                        NSWorkspace.shared.open(URL(string: "https://claude.ai/new#settings/usage")!)
+                    } label: {
+                        Label("Open claude.ai usage page", systemImage: "arrow.up.right")
+                    }
+                    .buttonStyle(.link)
+                }
+            } else {
+                LabeledContent("Codex account") {
+                    Text(codexAccountEmail ?? "Unknown — log in with `codex login`")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                LabeledContent("Verify usage") {
+                    Button {
+                        NSWorkspace.shared.open(URL(string: "https://chatgpt.com/codex/cloud/settings/analytics")!)
+                    } label: {
+                        Label("Open ChatGPT usage page", systemImage: "arrow.up.right")
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+
             LabeledContent("Icon") {
                 HStack(spacing: 8) {
                     if let img = ProviderIconRenderer.image(iconData: source.iconData, iconName: source.iconName, size: 16, color: .labelColor) {
@@ -760,6 +786,10 @@ private struct ProviderSettingsSection: View {
 
     private var iconDisplayName: String {
         source.iconData != nil ? "Custom icon" : "None"
+    }
+
+    private var codexAccountEmail: String? {
+        CodexAccountReader.currentAccountEmail()
     }
 
 }
@@ -1174,7 +1204,7 @@ private struct InfoView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Text("Version 1.1")
+            Text("Version 1.2")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

@@ -153,6 +153,50 @@ check(merged.fiveHour?.percentUsed == 30, "stale monitor merge should preserve f
 check(merged.oneWeek?.percentUsed == 55, "stale monitor merge should preserve oneWeek from previous snapshot")
 check(merged.status == .failed, "stale monitor merge should keep failed status")
 
+// Partial-success preservation: a probe reporting overall `.ok` but missing
+// just one window (e.g. a Claude CLI /usage redraw glitch that only garbles
+// one section) must not blank that window out — it should keep the
+// last-known-good value, exactly like a hard failure would.
+actor SequencedFakeProbe: UsageProbing {
+    let sourceID = "claude1"
+    let label = "C1"
+    let enabled = true
+    private var callCount = 0
+
+    func readUsage() async -> UsageSnapshot {
+        callCount += 1
+        if callCount == 1 {
+            return UsageSnapshot(
+                sourceID: sourceID, label: label, enabled: true,
+                percentUsed: 22, status: .ok, updatedAt: nil, errorMessage: nil,
+                fiveHour: ProviderUsageWindow(percentUsed: 22, resetDescription: "Resets in 3h"),
+                oneWeek: ProviderUsageWindow(percentUsed: 61, resetDescription: "Resets Jun 30")
+            )
+        }
+        // Second cycle: overall status is still `.ok`, but this time only
+        // fiveHour parsed — oneWeek came back nil despite no reported failure.
+        return UsageSnapshot(
+            sourceID: sourceID, label: label, enabled: true,
+            percentUsed: 25, status: .ok, updatedAt: nil, errorMessage: nil,
+            fiveHour: ProviderUsageWindow(percentUsed: 25, resetDescription: "Resets in 2h45m"),
+            oneWeek: nil
+        )
+    }
+}
+let sequencedMonitorSource = SourceConfig(
+    id: "claude1", label: "C1", enabled: true, mode: .fixture, command: nil
+)
+let sequencedMonitor = UsageMonitor(
+    config: AppConfig(refreshIntervalSeconds: 30, sources: [sequencedMonitorSource]),
+    probes: [SequencedFakeProbe()]
+)
+_ = await sequencedMonitor.refresh()
+let partialSuccessSnapshots = await sequencedMonitor.refresh()
+let partialSuccessSnapshot = partialSuccessSnapshots.first { $0.sourceID == "claude1" }
+check(partialSuccessSnapshot?.status == .ok, "partial-success refresh should keep reporting .ok")
+check(partialSuccessSnapshot?.fiveHour?.percentUsed == 25, "partial-success refresh should use the freshly parsed fiveHour")
+check(partialSuccessSnapshot?.oneWeek?.percentUsed == 61, "partial-success refresh should preserve the last-known-good oneWeek instead of blanking it")
+
 let redrawnClaudeOutput = """
 Curret session
 0% used
@@ -317,5 +361,71 @@ if ProcessInfo.processInfo.environment["AI_USAGE_LIVE_CLAUDE_OAUTH_CHECK"] == "1
     check(liveUsage.session != nil || liveUsage.weekly != nil, "live Claude OAuth check should return usage")
     print("Live Claude OAuth check passed")
 }
+
+// CodexAccountReader: decodes only the non-secret `email` claim from a local
+// id_token, purely for display in Settings ("which account is this probing?").
+let codexAccountFixtureHome = FileManager.default.temporaryDirectory
+    .appendingPathComponent("ai-usage-codex-account-check-\(UUID().uuidString)", isDirectory: true)
+defer { try? FileManager.default.removeItem(at: codexAccountFixtureHome) }
+try FileManager.default.createDirectory(at: codexAccountFixtureHome.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+let fakeJWTPayload = try JSONSerialization.data(withJSONObject: ["email": "test@example.com", "sub": "user-123"])
+let fakeJWT = "eyJhbGciOiJub25lIn0." + fakeJWTPayload.base64EncodedString()
+    .replacingOccurrences(of: "+", with: "-")
+    .replacingOccurrences(of: "/", with: "_")
+    .replacingOccurrences(of: "=", with: "") + ".fakesig"
+let codexAuthFixture = try JSONSerialization.data(withJSONObject: ["tokens": ["id_token": fakeJWT]])
+try codexAuthFixture.write(to: codexAccountFixtureHome.appendingPathComponent(".codex/auth.json"))
+check(
+    CodexAccountReader.currentAccountEmail(homeDirectory: codexAccountFixtureHome) == "test@example.com",
+    "CodexAccountReader should decode the email claim from the local id_token"
+)
+check(
+    CodexAccountReader.currentAccountEmail(homeDirectory: FileManager.default.temporaryDirectory.appendingPathComponent("ai-usage-codex-account-missing-\(UUID().uuidString)")) == nil,
+    "CodexAccountReader should return nil when no auth.json exists, not throw"
+)
+
+// UsageEstimator: "how long can I keep working at this pace" projection.
+let estimatorNow = Date(timeIntervalSince1970: 1_800_000_000)
+let estimatorReset = estimatorNow.addingTimeInterval(3 * 3600) // 3h until reset
+
+// Steady burn over 30 minutes, 20% used -> 40% used: rate implies ~50 more
+// minutes to 100%, which lands well before the 3h reset, so it should show.
+let steadyBurnPoints: [(ts: Date, pct: Int)] = [
+    (estimatorNow.addingTimeInterval(-30 * 60), 20),
+    (estimatorNow, 40)
+]
+let steadyEstimate = UsageEstimator.timeUntilExhausted(
+    points: steadyBurnPoints, currentPct: 40, resetsAt: estimatorReset, now: estimatorNow
+)
+check(steadyEstimate != nil, "estimator should project exhaustion when the pace would run out before reset")
+if let steadyEstimate {
+    check(abs(steadyEstimate - 90 * 60) < 60, "estimator should project ~90 minutes remaining at this burn rate, got \(steadyEstimate)s")
+}
+
+// Same rate, but reset is very soon (5 min) — reset wins, no estimate needed.
+let resetWinsEstimate = UsageEstimator.timeUntilExhausted(
+    points: steadyBurnPoints, currentPct: 40, resetsAt: estimatorNow.addingTimeInterval(5 * 60), now: estimatorNow
+)
+check(resetWinsEstimate == nil, "estimator should stay silent when the reset would come before exhaustion")
+
+// Too little elapsed time (5 min) since the first sample — not enough signal yet.
+let tooEarlyPoints: [(ts: Date, pct: Int)] = [
+    (estimatorNow.addingTimeInterval(-5 * 60), 20),
+    (estimatorNow, 40)
+]
+let tooEarlyEstimate = UsageEstimator.timeUntilExhausted(
+    points: tooEarlyPoints, currentPct: 40, resetsAt: estimatorReset, now: estimatorNow
+)
+check(tooEarlyEstimate == nil, "estimator should require a minimum elapsed span before projecting")
+
+// Flat usage (no progress) must not divide by zero or return a bogus value.
+let flatPoints: [(ts: Date, pct: Int)] = [
+    (estimatorNow.addingTimeInterval(-30 * 60), 40),
+    (estimatorNow, 40)
+]
+let flatEstimate = UsageEstimator.timeUntilExhausted(
+    points: flatPoints, currentPct: 40, resetsAt: estimatorReset, now: estimatorNow
+)
+check(flatEstimate == nil, "estimator should return nil for flat/no-progress usage instead of dividing by zero")
 
 print("AIUsageChecks passed")

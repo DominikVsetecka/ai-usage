@@ -101,6 +101,13 @@ final class StatusBarController {
             if let popoverWindow = popover.contentViewController?.view.window {
                 popoverWindow.appearance = NSAppearance(named: .darkAqua)
             }
+            // Reload history explicitly on every open rather than relying only
+            // on SwiftUI's onAppear (unreliable to re-fire on a long-lived,
+            // reused NSHostingController) or the next periodic timer tick —
+            // otherwise a stale/empty load can linger until restart.
+            Task { [weak popoverViewModel] in
+                await popoverViewModel?.loadHistory()
+            }
         }
     }
 

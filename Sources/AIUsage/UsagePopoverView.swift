@@ -34,7 +34,13 @@ final class PopoverViewModel: ObservableObject {
 
     func loadHistory() async {
         guard let store = historyStore else { return }
-        sparkData = await store.load(days: 7)
+        let loaded = await store.load(days: 7)
+        // A transient read hiccup (e.g. a file briefly unavailable during a
+        // concurrent write) returns an empty result rather than throwing.
+        // Once we've shown real history, don't let a single empty load blank
+        // it out — keep the last good data and let the next reload recover.
+        guard !loaded.isEmpty || sparkData.isEmpty else { return }
+        sparkData = loaded
     }
 
     func sparkPoints(for sourceID: String) -> [SparkPoint] {
@@ -254,6 +260,26 @@ private struct ProviderDetailSection: View {
         return Array(points[startIndex...])
     }
 
+    // "How long can I keep working at this pace" for the 5-hour window —
+    // see UsageEstimator for the actual projection logic.
+    private var fiveHourEstimate: String? {
+        guard let window = snapshot.fiveHour, let resetsAt = window.resetsAt else { return nil }
+        guard let seconds = UsageEstimator.timeUntilExhausted(
+            points: fiveHourBurn.map { ($0.ts, $0.pct) },
+            currentPct: window.percentUsed,
+            resetsAt: resetsAt
+        ) else { return nil }
+        return "≈\(Self.formatDuration(seconds)) left at this pace"
+    }
+
+    private static func formatDuration(_ seconds: TimeInterval) -> String {
+        let totalMinutes = max(1, Int(seconds / 60))
+        let h = totalMinutes / 60
+        let m = totalMinutes % 60
+        if h > 0 { return m > 0 ? "\(h)h \(m)m" : "\(h)h" }
+        return "\(m)m"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
@@ -280,7 +306,8 @@ private struct ProviderDetailSection: View {
                     showPercent: source?.resolvedShowPercentInPopover ?? true,
                     percentFontSize: config.resolvedPopoverPercentFontSize,
                     percentFontWeight: config.popoverPercentFontWeight,
-                    cycleDuration: 5 * 3600
+                    cycleDuration: 5 * 3600,
+                    estimate: fiveHourEstimate
                 )
             }
             if source?.resolvedShowOneWeekInPopover ?? true {
@@ -377,10 +404,17 @@ private struct WindowRow: View {
     var percentFontSize: CGFloat = 12
     var percentFontWeight: String? = nil
     var cycleDuration: TimeInterval = 5 * 3600
+    var estimate: String? = nil
 
     /// Fraction of the cycle still remaining (1 right after a reset → 0 at reset).
+    /// Some extra/model-scoped windows report `resetsAt == nil` while
+    /// completely untouched (Anthropic doesn't start that clock until the
+    /// scoped limit sees any usage) — treat that as "full cycle ahead", not
+    /// "nothing left", otherwise an unused 0%-used window would render as an
+    /// entirely elapsed bar (all history, no remaining fill), which is the
+    /// opposite of what's actually true.
     private func cycleRemainingFrac(for window: ProviderUsageWindow) -> CGFloat {
-        guard let resetsAt = window.resetsAt, cycleDuration > 0 else { return 0 }
+        guard let resetsAt = window.resetsAt, cycleDuration > 0 else { return 1 }
         let remaining = resetsAt.timeIntervalSinceNow
         return CGFloat(max(0, min(1, remaining / cycleDuration)))
     }
@@ -429,10 +463,17 @@ private struct WindowRow: View {
             }
 
             if let window {
-                Text(resetLabel(for: window))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .padding(.leading, 54)
+                HStack(spacing: 6) {
+                    Text(resetLabel(for: window))
+                    if let estimate {
+                        Text("·")
+                        Text(estimate)
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.leading, 54)
+                .lineLimit(1)
             }
         }
         .opacity(isStale ? 0.6 : 1)
@@ -454,7 +495,10 @@ private struct WindowRow: View {
             }
             return window.resetDescription ?? ""
         }
-        return window.resetDescription ?? ""
+        // No reset instant reported at all (some extra/model-scoped windows
+        // stay this way until they see any usage) — say so instead of
+        // leaving the caption blank.
+        return window.resetDescription ?? (window.percentUsed == 0 ? "Not used yet this cycle" : "")
     }
 
     private func barColor(pct: Int) -> Color {

@@ -2,6 +2,18 @@
 
 All notable changes to AI Usage are documented in this file.
 
+## 1.2 — 2026-07-09
+
+### Added
+
+- Codex account transparency: Settings now show which ChatGPT/Codex account is being probed (read locally from the non-secret `email` claim in the CLI's own id token — never a token or secret), plus a "Verify usage" link for both Claude (`claude.ai/new#settings/usage`) and Codex (`chatgpt.com/codex/cloud/settings/analytics`) so the numbers can be manually cross-checked.
+- Burn-rate estimate: the 5-hour window now shows "≈Xh Ym left at this pace" next to the reset countdown, projected from the burn rate since the last reset. Only shown once there's enough signal (15+ minutes of data) and only when it would run out before the next reset — otherwise the reset countdown alone is the relevant number.
+
+### Fixed
+
+- The popover could occasionally show no history at all until the app was restarted. Root cause: a probe reporting overall success while failing to parse just one window (e.g. a Claude CLI `/usage` redraw glitch) silently blanked that window instead of keeping the last-known-good value — only a hard failure was covered before. The popover also now reloads history explicitly every time it's opened, and a transient empty load never overwrites already-good data.
+- Untouched (0% used) model-scoped extra windows (e.g. a "Fable" cap) report no reset timestamp from the API and were misrendered as a fully elapsed bar (all history, no remaining fill) instead of the opposite — fully remaining.
+
 ## 1.1 — 2026-07-06
 
 ### Added

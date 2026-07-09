@@ -33,19 +33,7 @@ public final class UsageMonitor {
 
             for await snapshot in group {
                 if let index = snapshots.firstIndex(where: { $0.sourceID == snapshot.sourceID }) {
-                    let previous = snapshots[index]
-                    if snapshot.status == .failed {
-                        // On failure preserve any last-known values so the menu bar and popover don't go blank
-                        var merged = snapshot
-                        if merged.percentUsed == nil { merged.percentUsed = previous.percentUsed }
-                        if merged.resetDescription == nil { merged.resetDescription = previous.resetDescription }
-                        if merged.fiveHour == nil { merged.fiveHour = previous.fiveHour }
-                        if merged.oneWeek == nil { merged.oneWeek = previous.oneWeek }
-                        if merged.extraWindows.isEmpty { merged.extraWindows = previous.extraWindows }
-                        snapshots[index] = merged
-                    } else {
-                        snapshots[index] = snapshot
-                    }
+                    snapshots[index] = Self.merged(new: snapshot, previous: snapshots[index])
                 } else {
                     snapshots.append(snapshot)
                 }
@@ -53,5 +41,23 @@ public final class UsageMonitor {
             }
         }
         return snapshots
+    }
+
+    /// Fills in any missing window from the last-known-good snapshot,
+    /// regardless of the new snapshot's overall status. A probe can report
+    /// `.ok` while still failing to parse a single window this cycle (e.g. a
+    /// Claude CLI `/usage` TUI redraw glitch that only garbles one section) —
+    /// without this, that one field silently goes blank in the popover and
+    /// stays that way until the next fully-clean parse, which in practice can
+    /// mean "only a restart fixes it" if the same glitch keeps recurring.
+    /// Preserving per field, not just on hard failure, closes that gap.
+    private static func merged(new: UsageSnapshot, previous: UsageSnapshot) -> UsageSnapshot {
+        var merged = new
+        if merged.percentUsed == nil { merged.percentUsed = previous.percentUsed }
+        if merged.resetDescription == nil { merged.resetDescription = previous.resetDescription }
+        if merged.fiveHour == nil { merged.fiveHour = previous.fiveHour }
+        if merged.oneWeek == nil { merged.oneWeek = previous.oneWeek }
+        if merged.extraWindows.isEmpty { merged.extraWindows = previous.extraWindows }
+        return merged
     }
 }
