@@ -13,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             let config = try AppConfig.load(from: configURL)
+            if config.resolvedNotifyOnExtraQuotaUsage {
+                ExtraQuotaNotifier.requestAuthorizationIfNeeded()
+            }
             statusBarController = StatusBarController(config: config) { [weak self] in
                 self?.openSettings()
             }
@@ -38,7 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func openSettings() {
         guard let controller = statusBarController else { return }
-        settingsWindowController.show(config: controller.config, historyStore: controller.historyStore) { [weak self] config in
+        settingsWindowController.show(
+            config: controller.config,
+            historyStore: controller.historyStore,
+            snapshots: controller.snapshots
+        ) { [weak self] config in
             guard let self else { return }
             do {
                 if let configURL = self.configURL {

@@ -289,6 +289,7 @@ private struct ProviderDetailSection: View {
                     sparklineDirection: config.sparklineDirection ?? .ascending,
                     barMode: config.resolvedVisualBarMode,
                     blockWidth: config.resolvedVisualBlockWidth,
+                    blockGap: config.resolvedVisualBlockGap,
                     historyStyle: config.resolvedVisualHistoryStyle,
                     barHeight: config.resolvedVisualBarHeight,
                     historyDarken: config.resolvedVisualHistoryDarken,
@@ -312,6 +313,7 @@ private struct ProviderDetailSection: View {
                     sparklineDirection: config.sparklineDirection ?? .ascending,
                     barMode: config.resolvedVisualBarMode,
                     blockWidth: config.resolvedVisualBlockWidth,
+                    blockGap: config.resolvedVisualBlockGap,
                     historyStyle: config.resolvedVisualHistoryStyle,
                     barHeight: config.resolvedVisualBarHeight,
                     historyDarken: config.resolvedVisualHistoryDarken,
@@ -336,6 +338,7 @@ private struct ProviderDetailSection: View {
                         sparklineDirection: config.sparklineDirection ?? .ascending,
                         barMode: config.resolvedVisualBarMode,
                         blockWidth: config.resolvedVisualBlockWidth,
+                        blockGap: config.resolvedVisualBlockGap,
                         historyStyle: config.resolvedVisualHistoryStyle,
                         barHeight: config.resolvedVisualBarHeight,
                         historyDarken: config.resolvedVisualHistoryDarken,
@@ -395,6 +398,7 @@ private struct WindowRow: View {
     let sparklineDirection: SparklineDirection
     var barMode: VisualBarMode = .time
     var blockWidth: VisualBlockWidth = .medium
+    var blockGap: CGFloat = 2
     var historyStyle: VisualHistoryStyle = .bars
     var barHeight: CGFloat = 30
     var historyDarken: Double = 10
@@ -440,6 +444,7 @@ private struct WindowRow: View {
                         sparklineDirection: sparklineDirection,
                         barMode: barMode,
                         blockWidth: blockWidth,
+                        blockGap: blockGap,
                         historyStyle: historyStyle,
                         barHeight: barHeight,
                         historyDarken: historyDarken,
@@ -529,6 +534,7 @@ struct VisualBurnBarView: View {
     var sparklineDirection: SparklineDirection = .ascending
     var barMode: VisualBarMode = .time
     var blockWidth: VisualBlockWidth = .medium
+    var blockGap: CGFloat = 2
     var historyStyle: VisualHistoryStyle = .bars
     var barHeight: CGFloat = 30
     var historyDarken: Double = 10
@@ -547,7 +553,7 @@ struct VisualBurnBarView: View {
     /// hit-testing and drawing so the visible blocks and the hover target
     /// always agree (a mismatch here previously caused a hover bug).
     private var effectiveGap: CGFloat {
-        connectedHistorySteps ? 0 : blockWidth.metrics.gap
+        connectedHistorySteps ? 0 : blockGap
     }
 
     @State private var hoveredPoint: BurnPoint? = nil

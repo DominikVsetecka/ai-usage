@@ -4,10 +4,16 @@ import SwiftUI
 
 @MainActor
 final class SettingsWindowController: NSWindowController {
-    func show(config: AppConfig, historyStore: UsageHistoryStore, onSave: @escaping (AppConfig) -> Void) {
+    func show(
+        config: AppConfig,
+        historyStore: UsageHistoryStore,
+        snapshots: [UsageSnapshot],
+        onSave: @escaping (AppConfig) -> Void
+    ) {
         let view = SettingsView(
             config: config,
             historyStore: historyStore,
+            snapshots: snapshots,
             onSave: { updated in
                 onSave(updated)
             },

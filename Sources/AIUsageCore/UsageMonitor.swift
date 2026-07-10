@@ -15,6 +15,7 @@ public final class UsageMonitor {
     }
 
     public func refresh(
+        force: Bool = false,
         onUpdate: (@MainActor ([UsageSnapshot]) -> Void)? = nil
     ) async -> [UsageSnapshot] {
         guard !isRefreshing else {
@@ -27,7 +28,10 @@ public final class UsageMonitor {
         await withTaskGroup(of: UsageSnapshot.self) { group in
             for probe in probes {
                 group.addTask {
-                    await probe.readUsage()
+                    if force, let probe = probe as? any ForceRefreshableUsageProbing {
+                        return await probe.readUsage(force: true)
+                    }
+                    return await probe.readUsage()
                 }
             }
 

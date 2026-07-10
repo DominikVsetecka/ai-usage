@@ -254,6 +254,37 @@ check(oauthUsage.session?.percentUsed == 22, "Claude OAuth parser should read fi
 check(oauthUsage.weekly?.percentUsed == 61, "Claude OAuth parser should read weekly usage")
 check(oauthUsage.extra.isEmpty, "Claude OAuth parser should report no extras when limits is absent")
 
+let oauthUsageUpdatedFixture = Data(#"{"five_hour":{"utilization":44.0,"resets_at":"2030-03-17T12:30:00.000Z"},"seven_day":{"utilization":66.0,"resets_at":"2030-03-20T18:45:00Z"}}"#.utf8)
+let cacheProfileID = UUID()
+let cacheStore = MemoryClaudeCredentialStore()
+try cacheStore.save(
+    ClaudeOAuthCredentials(
+        accessToken: "cache-fixture-access",
+        refreshToken: nil,
+        expiresAtMilliseconds: (Date().timeIntervalSince1970 + 3600) * 1_000
+    ),
+    profileID: cacheProfileID
+)
+let cacheTransport = QueueHTTPTransport(responses: [
+    HTTPResult(data: oauthUsageFixture, statusCode: 200),
+    HTTPResult(data: oauthUsageUpdatedFixture, statusCode: 200)
+])
+let cacheService = ClaudeOAuthUsageService(
+    store: cacheStore,
+    transport: cacheTransport,
+    cacheTTL: 3600
+)
+let cachedUsageFirst = try await cacheService.fetch(profileID: cacheProfileID)
+let cachedUsageSecond = try await cacheService.fetch(profileID: cacheProfileID)
+check(cachedUsageFirst.session?.percentUsed == 22, "Claude OAuth cache fixture should start with first usage value")
+check(cachedUsageSecond.session?.percentUsed == 22, "Claude OAuth should reuse cache while cache TTL is active")
+let cachedRequests = await cacheTransport.requests
+check(cachedRequests.count == 1, "Claude OAuth should avoid duplicate HTTP calls inside cache TTL")
+let forcedUsage = try await cacheService.fetch(profileID: cacheProfileID, force: true)
+check(forcedUsage.session?.percentUsed == 44, "forced Claude OAuth refresh should bypass cache and read fresh usage")
+let forcedRequests = await cacheTransport.requests
+check(forcedRequests.count == 2, "forced Claude OAuth refresh should make a new HTTP call")
+
 // Real-world shape observed from the live API: a "limits" array with a
 // model-scoped entry (scope.model.display_name) for extra per-model quotas
 // like a "Fable" weekly cap, alongside the plain session/weekly_all entries.
@@ -493,5 +524,42 @@ check(mergedNoRepeats.count == 3, "merger should leave all-distinct values as se
 
 let mergedEmpty = HistoryBlockMerger.mergedGroups(pcts: [])
 check(mergedEmpty.isEmpty, "merger should return no groups for empty input")
+
+// ExtraQuotaUsageWatcher: notify once per quiet-then-active burst of usage
+// on an extra/model-scoped window (e.g. a "Fable" cap).
+let watcherNow = Date(timeIntervalSince1970: 1_800_000_000)
+
+let firstEverIncrease = ExtraQuotaUsageWatcher.evaluate(
+    previousPercent: nil, currentPercent: 3, lastIncreaseAt: nil, now: watcherNow
+)
+check(firstEverIncrease.shouldNotify, "watcher should notify the first time it ever observes usage on a window")
+check(firstEverIncrease.lastIncreaseAt == watcherNow, "watcher should stamp the increase time")
+
+let continuedBurst = ExtraQuotaUsageWatcher.evaluate(
+    previousPercent: 3, currentPercent: 6, lastIncreaseAt: watcherNow, now: watcherNow.addingTimeInterval(5 * 60)
+)
+check(!continuedBurst.shouldNotify, "watcher should stay silent for a continued burst within the quiet period")
+check(continuedBurst.lastIncreaseAt == watcherNow.addingTimeInterval(5 * 60), "watcher should still refresh the increase timestamp during a continued burst")
+
+let flatUsage = ExtraQuotaUsageWatcher.evaluate(
+    previousPercent: 6, currentPercent: 6, lastIncreaseAt: watcherNow, now: watcherNow.addingTimeInterval(10 * 60)
+)
+check(!flatUsage.shouldNotify, "watcher should not notify when the percent hasn't changed")
+check(flatUsage.lastIncreaseAt == watcherNow, "watcher should leave the increase timestamp untouched when nothing changed")
+
+let resetDrop = ExtraQuotaUsageWatcher.evaluate(
+    previousPercent: 40, currentPercent: 0, lastIncreaseAt: watcherNow, now: watcherNow.addingTimeInterval(60)
+)
+check(!resetDrop.shouldNotify, "watcher should not treat a reset (percent drop) as new usage")
+
+let freshStartAfterQuiet = ExtraQuotaUsageWatcher.evaluate(
+    previousPercent: 6, currentPercent: 9, lastIncreaseAt: watcherNow, now: watcherNow.addingTimeInterval(31 * 60)
+)
+check(freshStartAfterQuiet.shouldNotify, "watcher should notify again once usage resumes after the quiet period elapses")
+
+let stillWithinQuiet = ExtraQuotaUsageWatcher.evaluate(
+    previousPercent: 6, currentPercent: 9, lastIncreaseAt: watcherNow, now: watcherNow.addingTimeInterval(29 * 60)
+)
+check(!stillWithinQuiet.shouldNotify, "watcher should stay silent for usage that resumes just under the quiet period")
 
 print("AIUsageChecks passed")

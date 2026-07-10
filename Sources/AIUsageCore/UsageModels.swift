@@ -198,3 +198,7 @@ public protocol UsageProbing: Sendable {
 
     func readUsage() async -> UsageSnapshot
 }
+
+public protocol ForceRefreshableUsageProbing: UsageProbing {
+    func readUsage(force: Bool) async -> UsageSnapshot
+}

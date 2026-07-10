@@ -8,6 +8,8 @@
 	<string>AI Usage</string>
 	<key>CFBundleExecutable</key>
 	<string>AIUsage</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>app.ai-usage</string>
 	<key>CFBundleInfoDictionaryVersion</key>

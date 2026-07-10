@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @State private var draft: AppConfig
+    @State private var latestSnapshots: [UsageSnapshot]
     let historyStore: UsageHistoryStore
     let onSave: (AppConfig) -> Void
     let onCancel: () -> Void
@@ -14,8 +15,15 @@ struct SettingsView: View {
 
     enum SettingsTab { case settings, history, info }
 
-    init(config: AppConfig, historyStore: UsageHistoryStore, onSave: @escaping (AppConfig) -> Void, onCancel: @escaping () -> Void) {
+    init(
+        config: AppConfig,
+        historyStore: UsageHistoryStore,
+        snapshots: [UsageSnapshot],
+        onSave: @escaping (AppConfig) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
         _draft = State(initialValue: config)
+        _latestSnapshots = State(initialValue: snapshots)
         self.historyStore = historyStore
         self.onSave = onSave
         self.onCancel = onCancel
@@ -53,6 +61,15 @@ struct SettingsView: View {
 
                     Toggle("Remaining countdown (100% to 0%)", isOn: remainingCountdownBinding)
                         .help("Show how much quota is left instead of how much is used — affects both the menu bar and the popover.")
+
+                    Toggle("Notify when an extra quota starts being used", isOn: notifyOnExtraQuotaUsageBinding)
+                        .help("Shows a brief system notification the first time a model-scoped extra quota (e.g. a \"Fable\" cap) gains usage after being quiet for 30+ minutes — a heads-up in case you didn't notice you'd switched models.")
+
+                    if draft.resolvedNotifyOnExtraQuotaUsage {
+                        Button("Show demo notification") {
+                            ExtraQuotaNotifier.sendDemoNotification()
+                        }
+                    }
                 }
 
                 Section {
@@ -128,6 +145,22 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
 
+                        if !draft.resolvedConnectedHistorySteps {
+                            LabeledContent("History block gap") {
+                                HStack {
+                                    Slider(
+                                        value: visualBlockGapBinding,
+                                        in: AppConfig.visualBlockGapRange,
+                                        step: 1
+                                    )
+                                    Text("\(Int(draft.resolvedVisualBlockGap))pt")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 34, alignment: .trailing)
+                                }
+                            }
+                        }
+
                         Toggle("Merge unchanged history blocks", isOn: mergeUnchangedHistoryBlocksBinding)
                             .help("Draw consecutive blocks with the same recorded percent as one connected block instead of separate ones with gaps.")
 
@@ -195,10 +228,17 @@ struct SettingsView: View {
                 }
 
                 ForEach(draft.sources.indices, id: \.self) { index in
-                    ProviderSettingsSection(source: $draft.sources[index])
+                    ProviderSettingsSection(
+                        source: $draft.sources[index],
+                        snapshot: latestSnapshots.first(where: { $0.sourceID == draft.sources[index].id })
+                    )
                 }
             }
             .formStyle(.grouped)
+            .onReceive(NotificationCenter.default.publisher(for: .aiUsageSnapshotsDidUpdate)) { notification in
+                guard let snapshots = notification.object as? [UsageSnapshot] else { return }
+                latestSnapshots = snapshots
+            }
 
             Divider()
             HStack {
@@ -221,6 +261,13 @@ struct SettingsView: View {
         )
     }
 
+    private var notifyOnExtraQuotaUsageBinding: Binding<Bool> {
+        Binding(
+            get: { draft.resolvedNotifyOnExtraQuotaUsage },
+            set: { draft.notifyOnExtraQuotaUsage = $0 }
+        )
+    }
+
     private var visualBarModeBinding: Binding<VisualBarMode> {
         Binding(
             get: { draft.resolvedVisualBarMode },
@@ -232,6 +279,13 @@ struct SettingsView: View {
         Binding(
             get: { draft.resolvedVisualBlockWidth },
             set: { draft.visualBlockWidth = $0 == .medium ? nil : $0 }
+        )
+    }
+
+    private var visualBlockGapBinding: Binding<CGFloat> {
+        Binding(
+            get: { draft.resolvedVisualBlockGap },
+            set: { draft.visualBlockGap = $0 }
         )
     }
 
@@ -373,6 +427,7 @@ private struct VisualBarPreviewRow: View {
                     sparklineDirection: config.sparklineDirection ?? .ascending,
                     barMode: config.resolvedVisualBarMode,
                     blockWidth: config.resolvedVisualBlockWidth,
+                    blockGap: config.resolvedVisualBlockGap,
                     historyStyle: config.resolvedVisualHistoryStyle,
                     barHeight: config.resolvedVisualBarHeight,
                     historyDarken: config.resolvedVisualHistoryDarken,
@@ -393,6 +448,7 @@ private struct VisualBarPreviewRow: View {
 
 private struct ProviderSettingsSection: View {
     @Binding var source: SourceConfig
+    let snapshot: UsageSnapshot?
 
     private enum TestState {
         case idle, testing, ok(Int), failed(String)
@@ -505,6 +561,19 @@ private struct ProviderSettingsSection: View {
             LabeledContent("Fetch method") {
                 Text(fetchMethodDescription)
                     .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("Last usage check") {
+                Text(lastUsageCheckDescription)
+                    .foregroundStyle(lastUsageCheckColor)
+                    .lineLimit(2)
+            }
+
+            LabeledContent("Last value") {
+                Text(lastUsageValueDescription)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
             }
 
             if isClaude {
@@ -760,6 +829,63 @@ private struct ProviderSettingsSection: View {
         if usesClaudeProfile { return "OAuth · Anthropic usage" }
         return "CLI · claude /usage"
     }
+
+    private var lastUsageCheckDescription: String {
+        guard let snapshot else { return "No check yet" }
+        let time = snapshot.updatedAt.map(Self.lastCheckFormatter.string(from:)) ?? "Never"
+        switch snapshot.status {
+        case .ok:
+            return "\(time) · OK"
+        case .failed:
+            if let message = snapshot.errorMessage, !message.isEmpty {
+                return "\(time) · Failed: \(message)"
+            }
+            return "\(time) · Failed"
+        case .disabled:
+            return "\(time) · Disabled"
+        case .idle:
+            return "\(time) · Waiting"
+        }
+    }
+
+    private var lastUsageCheckColor: Color {
+        guard let snapshot else { return .secondary }
+        switch snapshot.status {
+        case .ok: return .green
+        case .failed: return .red
+        case .disabled, .idle: return .secondary
+        }
+    }
+
+    private var lastUsageValueDescription: String {
+        guard let snapshot else { return "No value yet" }
+        if let displayValue = snapshot.displayValue {
+            return displayValue
+        }
+
+        var parts: [String] = []
+        if let fiveHour = snapshot.fiveHour {
+            parts.append("5-hour \(fiveHour.percentUsed)% used")
+        }
+        if let oneWeek = snapshot.oneWeek {
+            parts.append("1-week \(oneWeek.percentUsed)% used")
+        }
+        for (name, window) in snapshot.extraWindows.sorted(by: { $0.key < $1.key }) {
+            parts.append("\(name) \(window.percentUsed)% used")
+        }
+        if parts.isEmpty, let percentUsed = snapshot.percentUsed {
+            parts.append("\(percentUsed)% used")
+        }
+        return parts.isEmpty ? "No value yet" : parts.joined(separator: " · ")
+    }
+
+    private static let lastCheckFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.dateStyle = .none
+        formatter.timeStyle = .medium
+        return formatter
+    }()
 
     private var claudeConnectionBinding: Binding<SourceMode> {
         Binding(

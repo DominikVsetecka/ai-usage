@@ -54,7 +54,7 @@ public actor ClaudeOAuthUsageService {
     public init(
         store: any ClaudeCredentialStoring = KeychainClaudeCredentialStore(),
         transport: any HTTPTransporting = URLSessionHTTPTransport(),
-        cacheTTL: TimeInterval = 15 * 60
+        cacheTTL: TimeInterval = 20
     ) {
         self.store = store
         self.transport = transport
@@ -252,7 +252,7 @@ public actor ClaudeOAuthUsageService {
     }
 }
 
-public struct ClaudeOAuthUsageProbe: UsageProbing {
+public struct ClaudeOAuthUsageProbe: ForceRefreshableUsageProbing {
     public let sourceID: String
     public let label: String
     public let enabled: Bool
@@ -278,13 +278,17 @@ public struct ClaudeOAuthUsageProbe: UsageProbing {
     }
 
     public func readUsage() async -> UsageSnapshot {
+        await readUsage(force: false)
+    }
+
+    public func readUsage(force: Bool) async -> UsageSnapshot {
         guard enabled else {
             return UsageSnapshot(sourceID: sourceID, label: label, enabled: false, percentUsed: nil, status: .disabled, updatedAt: Date(), errorMessage: nil)
         }
         guard let profile else { return failure("Import a Claude Code account in Settings") }
 
         do {
-            let result = try await service.fetch(profileID: profile.id)
+            let result = try await service.fetch(profileID: profile.id, force: force)
             let selected = quota == .weekly ? result.weekly : result.session
             guard let selected else { return failure("Claude did not report \(quota.displayName.lowercased()) usage") }
             return UsageSnapshot(

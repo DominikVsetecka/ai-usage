@@ -3,6 +3,10 @@ import AppKit
 import Foundation
 import SwiftUI
 
+extension Notification.Name {
+    static let aiUsageSnapshotsDidUpdate = Notification.Name("AIUsageSnapshotsDidUpdate")
+}
+
 @MainActor
 final class StatusBarController {
     private let statusItem: NSStatusItem
@@ -13,6 +17,14 @@ final class StatusBarController {
     private var popover: NSPopover?
     private var popoverViewModel: PopoverViewModel?
     let historyStore: UsageHistoryStore
+    /// Last time each extra/model-scoped window (keyed `"sourceID|windowName"`)
+    /// was seen to actively gain usage — feeds `ExtraQuotaUsageWatcher` so a
+    /// notification only fires once per quiet-then-active burst.
+    private var extraQuotaLastIncreaseAt: [String: Date] = [:]
+
+    var snapshots: [UsageSnapshot] {
+        monitor.snapshots
+    }
 
     init(config: AppConfig, onOpenSettings: @escaping () -> Void) {
         self.config = config
@@ -25,7 +37,7 @@ final class StatusBarController {
         scheduleRefresh()
 
         Task {
-            await refreshNow()
+            await refreshNow(force: true)
         }
     }
 
@@ -45,9 +57,12 @@ final class StatusBarController {
         self.config = config
         self.monitor = UsageMonitor(config: config)
         popoverViewModel?.config = config
+        if config.resolvedNotifyOnExtraQuotaUsage {
+            ExtraQuotaNotifier.requestAuthorizationIfNeeded()
+        }
         render()
         scheduleRefresh()
-        Task { await refreshNow() }
+        Task { await refreshNow(force: true) }
     }
 
     private func configureStatusItem() {
@@ -65,7 +80,7 @@ final class StatusBarController {
         vm.snapshots = monitor.snapshots
         vm.historyStore = historyStore
         vm.onRefresh = { [weak self] in
-            Task { await self?.refreshNow() }
+            Task { await self?.refreshNow(force: true) }
         }
         vm.onOpenSettings = { [weak self] in
             self?.popover?.performClose(nil)
@@ -121,10 +136,14 @@ final class StatusBarController {
         timer?.tolerance = min(5, monitor.refreshIntervalSeconds * 0.1)
     }
 
-    private func refreshNow() async {
+    private func refreshNow(force: Bool = false) async {
         popoverViewModel?.isRefreshing = true
-        _ = await monitor.refresh { [weak self] _ in
+        let previousSnapshots = monitor.snapshots
+        _ = await monitor.refresh(force: force) { [weak self] _ in
             self?.render()
+        }
+        if config.resolvedNotifyOnExtraQuotaUsage {
+            checkExtraQuotaUsageNotifications(previous: previousSnapshots, current: monitor.snapshots)
         }
         await historyStore.record(monitor.snapshots)
         if popover?.isShown == true {
@@ -134,10 +153,34 @@ final class StatusBarController {
         render()
     }
 
+    /// Fires a one-off "quota in use" notification per extra/model-scoped
+    /// window the first time it gains usage after a quiet spell — see
+    /// `ExtraQuotaUsageWatcher` for the gating rule.
+    private func checkExtraQuotaUsageNotifications(previous: [UsageSnapshot], current: [UsageSnapshot]) {
+        let now = Date()
+        for snapshot in current where snapshot.enabled {
+            let previousWindows = previous.first(where: { $0.sourceID == snapshot.sourceID })?.extraWindows ?? [:]
+            for (windowName, window) in snapshot.extraWindows {
+                let key = "\(snapshot.sourceID)|\(windowName)"
+                let result = ExtraQuotaUsageWatcher.evaluate(
+                    previousPercent: previousWindows[windowName]?.percentUsed,
+                    currentPercent: window.percentUsed,
+                    lastIncreaseAt: extraQuotaLastIncreaseAt[key],
+                    now: now
+                )
+                extraQuotaLastIncreaseAt[key] = result.lastIncreaseAt
+                if result.shouldNotify {
+                    ExtraQuotaNotifier.notifyUsageStarted(sourceLabel: snapshot.label, windowName: windowName)
+                }
+            }
+        }
+    }
+
     private func render() {
         renderStatusTitle()
         popoverViewModel?.snapshots = monitor.snapshots
         popoverViewModel?.config = config
+        NotificationCenter.default.post(name: .aiUsageSnapshotsDidUpdate, object: monitor.snapshots)
         updatePopoverContentSize()
     }
 

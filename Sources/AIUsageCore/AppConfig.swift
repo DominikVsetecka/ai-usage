@@ -19,6 +19,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var mergeUnchangedHistoryBlocks: Bool?
     public var roundedHistorySteps: Bool?
     public var connectedHistorySteps: Bool?
+    public var notifyOnExtraQuotaUsage: Bool?
+    public var visualBlockGap: CGFloat?
     public var sources: [SourceConfig]
 
     public init(
@@ -40,6 +42,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
         mergeUnchangedHistoryBlocks: Bool? = nil,
         roundedHistorySteps: Bool? = nil,
         connectedHistorySteps: Bool? = nil,
+        notifyOnExtraQuotaUsage: Bool? = nil,
+        visualBlockGap: CGFloat? = nil,
         sources: [SourceConfig]
     ) {
         self.refreshIntervalSeconds = max(5, refreshIntervalSeconds)
@@ -60,6 +64,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.mergeUnchangedHistoryBlocks = mergeUnchangedHistoryBlocks
         self.roundedHistorySteps = roundedHistorySteps
         self.connectedHistorySteps = connectedHistorySteps
+        self.notifyOnExtraQuotaUsage = notifyOnExtraQuotaUsage
+        self.visualBlockGap = visualBlockGap
         self.sources = sources
     }
 
@@ -73,6 +79,17 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public var resolvedVisualBlockWidth: VisualBlockWidth {
         visualBlockWidth ?? .medium
+    }
+
+    /// Gap between history blocks, in points. Defaults to the active block
+    /// width preset's own gap (0 for Narrow, 2 for Medium) until the user
+    /// overrides it via the slider — switching presets afterward keeps the
+    /// override rather than resetting it.
+    public static let visualBlockGapRange: ClosedRange<CGFloat> = 0...8
+
+    public var resolvedVisualBlockGap: CGFloat {
+        guard let visualBlockGap else { return resolvedVisualBlockWidth.metrics.gap }
+        return min(Self.visualBlockGapRange.upperBound, max(Self.visualBlockGapRange.lowerBound, visualBlockGap))
     }
 
     public var resolvedVisualHistoryStyle: VisualHistoryStyle {
@@ -97,6 +114,10 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public var resolvedConnectedHistorySteps: Bool {
         connectedHistorySteps ?? false
+    }
+
+    public var resolvedNotifyOnExtraQuotaUsage: Bool {
+        notifyOnExtraQuotaUsage ?? false
     }
 
     public static let visualBarHeightRange: ClosedRange<CGFloat> = 8...56
