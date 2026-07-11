@@ -48,26 +48,43 @@ public actor ClaudeOAuthUsageService {
     private let store: any ClaudeCredentialStoring
     private let transport: any HTTPTransporting
     private let cacheTTL: TimeInterval
+    /// Client-side floor on how often a *forced* (manual) refresh may actually
+    /// hit the network. Forced fetches bypass the normal `cacheTTL`, but never
+    /// fetch more than once per this interval — spamming the refresh button
+    /// then serves cache instead of hammering the API, which is what prevents
+    /// self-inflicted 429s (and the multi-minute lock they trigger).
+    private let minForceFetchInterval: TimeInterval
     private var cache: [UUID: CacheEntry] = [:]
     private var retryAfter: [UUID: Date] = [:]
 
     public init(
         store: any ClaudeCredentialStoring = KeychainClaudeCredentialStore(),
         transport: any HTTPTransporting = URLSessionHTTPTransport(),
-        cacheTTL: TimeInterval = 20
+        cacheTTL: TimeInterval = 20,
+        minForceFetchInterval: TimeInterval = 10
     ) {
         self.store = store
         self.transport = transport
         self.cacheTTL = cacheTTL
+        self.minForceFetchInterval = minForceFetchInterval
     }
 
     public func fetch(profileID: UUID, force: Bool = false) async throws -> ClaudeUsageResult {
         let now = Date()
-        if !force, let cached = cache[profileID], now.timeIntervalSince(cached.storedAt) < cacheTTL {
-            return cached.result
+        // A forced (manual) refresh bypasses most of the cache TTL, but still
+        // honours `minForceFetchInterval` as a hard floor — so rapid button
+        // presses are served from cache rather than each firing a request.
+        if let cached = cache[profileID] {
+            let threshold = force ? minForceFetchInterval : cacheTTL
+            if now.timeIntervalSince(cached.storedAt) < threshold {
+                return cached.result
+            }
         }
         if let retryDate = retryAfter[profileID], retryDate > now {
-            if let cached = cache[profileID] { return cached.result }
+            // Surface the lock as an error rather than quietly returning the
+            // frozen cached value as a fresh success — the monitor restores the
+            // last-known numbers per field and the status bar greys them, so the
+            // rate-limit is actually visible instead of looking up to date.
             throw ClaudeOAuthUsageError.rateLimited(retryDate)
         }
 
@@ -91,7 +108,6 @@ public actor ClaudeOAuthUsageService {
             let delay = TimeInterval(response.headers["retry-after"].flatMap(Double.init) ?? 300)
             let date = now.addingTimeInterval(max(30, delay))
             retryAfter[profileID] = date
-            if let cached = cache[profileID] { return cached.result }
             throw ClaudeOAuthUsageError.rateLimited(date)
         }
         guard response.statusCode == 200 else {

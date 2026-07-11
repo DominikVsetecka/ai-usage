@@ -51,13 +51,20 @@ struct SettingsView: View {
             Form {
                 Section("General") {
                     Picker("Refresh interval", selection: $draft.refreshIntervalSeconds) {
-                        Text("15 seconds").tag(TimeInterval(15))
                         Text("30 seconds").tag(TimeInterval(30))
                         Text("1 minute").tag(TimeInterval(60))
                         Text("2 minutes").tag(TimeInterval(120))
                         Text("5 minutes").tag(TimeInterval(300))
                     }
                     .pickerStyle(.menu)
+                    .onAppear {
+                        // Legacy configs may still hold the removed 15s interval;
+                        // snap them up to the new 30s minimum so the picker shows
+                        // a valid selection instead of a blank one.
+                        if draft.refreshIntervalSeconds < 30 {
+                            draft.refreshIntervalSeconds = 30
+                        }
+                    }
 
                     Toggle("Remaining countdown (100% to 0%)", isOn: remainingCountdownBinding)
                         .help("Show how much quota is left instead of how much is used — affects both the menu bar and the popover.")
@@ -1385,7 +1392,7 @@ private struct InfoView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Text("Version 1.3")
+            Text("Version 1.4")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

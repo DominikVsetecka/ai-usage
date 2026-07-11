@@ -2,6 +2,18 @@
 
 All notable changes to AI Usage are documented in this file.
 
+## 1.4 — 2026-07-11
+
+### Changed
+
+- Refresh interval minimum is now 30 seconds; the 15-second option was removed. At 15s the numbers barely move (the usage windows are 5-hour and weekly), so it only added API load for no real benefit. A saved 15-second config auto-migrates to 30 seconds.
+- The Claude usage cache now scales with the configured refresh interval (about 0.8× the interval) instead of a fixed 20 seconds, so lowering the interval actually yields proportionally fresher data instead of staying capped at the old fixed window. (The design note DEC-0006 claimed a "15-minute cache"; the code had always used a much shorter window — this reconciles note and behaviour.)
+
+### Fixed
+
+- Rapid manual refreshes could trip Claude's usage API rate limit (HTTP 429) and then lock every refresh for several minutes. Manual refresh now has a client-side floor — at most one real network fetch per 10 seconds, extra clicks are served from cache — so button-spamming can no longer trigger the lockout.
+- When Claude's usage API does rate-limit, the value is now shown greyed out (stale, with the retry time) instead of silently freezing the last value while still looking current — so the lock is actually visible rather than looking like "refresh does nothing".
+
 ## 1.3 — 2026-07-10
 
 ### Added

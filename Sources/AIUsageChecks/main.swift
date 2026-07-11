@@ -272,7 +272,8 @@ let cacheTransport = QueueHTTPTransport(responses: [
 let cacheService = ClaudeOAuthUsageService(
     store: cacheStore,
     transport: cacheTransport,
-    cacheTTL: 3600
+    cacheTTL: 3600,
+    minForceFetchInterval: 0
 )
 let cachedUsageFirst = try await cacheService.fetch(profileID: cacheProfileID)
 let cachedUsageSecond = try await cacheService.fetch(profileID: cacheProfileID)
@@ -284,6 +285,78 @@ let forcedUsage = try await cacheService.fetch(profileID: cacheProfileID, force:
 check(forcedUsage.session?.percentUsed == 44, "forced Claude OAuth refresh should bypass cache and read fresh usage")
 let forcedRequests = await cacheTransport.requests
 check(forcedRequests.count == 2, "forced Claude OAuth refresh should make a new HTTP call")
+
+// Force throttle: rapid manual refreshes must not each hit the network. A
+// client-side floor (minForceFetchInterval) serves cache instead — this is
+// what stops button-spamming from tripping the server's 429 rate limit.
+let throttleProfileID = UUID()
+let throttleStore = MemoryClaudeCredentialStore()
+try throttleStore.save(
+    ClaudeOAuthCredentials(
+        accessToken: "throttle-access",
+        refreshToken: nil,
+        expiresAtMilliseconds: (Date().timeIntervalSince1970 + 3600) * 1_000
+    ),
+    profileID: throttleProfileID
+)
+let throttleTransport = QueueHTTPTransport(responses: [
+    HTTPResult(data: oauthUsageFixture, statusCode: 200),
+    HTTPResult(data: oauthUsageUpdatedFixture, statusCode: 200)
+])
+let throttleService = ClaudeOAuthUsageService(
+    store: throttleStore,
+    transport: throttleTransport,
+    cacheTTL: 0,
+    minForceFetchInterval: 3600
+)
+let throttleFirst = try await throttleService.fetch(profileID: throttleProfileID, force: true)
+let throttleSecond = try await throttleService.fetch(profileID: throttleProfileID, force: true)
+check(throttleFirst.session?.percentUsed == 22, "first forced fetch reads live usage")
+check(throttleSecond.session?.percentUsed == 22, "a forced fetch inside the throttle window is served from cache")
+let throttleRequests = await throttleTransport.requests
+check(throttleRequests.count == 1, "force throttle should collapse rapid manual refreshes to a single HTTP call")
+
+// Rate-limit visibility: a 429 must surface as a thrown rateLimited error (so
+// the status bar can grey the stale value), never be masked by silently
+// returning the cached value as if it were a fresh success. The lock then
+// keeps throwing on subsequent fetches without making extra HTTP calls.
+let rateLimitProfileID = UUID()
+let rateLimitStore = MemoryClaudeCredentialStore()
+try rateLimitStore.save(
+    ClaudeOAuthCredentials(
+        accessToken: "ratelimit-access",
+        refreshToken: nil,
+        expiresAtMilliseconds: (Date().timeIntervalSince1970 + 3600) * 1_000
+    ),
+    profileID: rateLimitProfileID
+)
+let rateLimitTransport = QueueHTTPTransport(responses: [
+    HTTPResult(data: oauthUsageFixture, statusCode: 200),
+    HTTPResult(data: Data(), statusCode: 429, headers: ["retry-after": "300"])
+])
+let rateLimitService = ClaudeOAuthUsageService(
+    store: rateLimitStore,
+    transport: rateLimitTransport,
+    cacheTTL: 0,
+    minForceFetchInterval: 0
+)
+_ = try await rateLimitService.fetch(profileID: rateLimitProfileID, force: true)
+var rateLimitThrew = false
+do {
+    _ = try await rateLimitService.fetch(profileID: rateLimitProfileID, force: true)
+} catch let error as ClaudeOAuthUsageError {
+    if case .rateLimited = error { rateLimitThrew = true }
+} catch {}
+check(rateLimitThrew, "a 429 should surface as a rateLimited error, not a silent cached success")
+var rateLimitStillLocked = false
+do {
+    _ = try await rateLimitService.fetch(profileID: rateLimitProfileID, force: true)
+} catch let error as ClaudeOAuthUsageError {
+    if case .rateLimited = error { rateLimitStillLocked = true }
+} catch {}
+check(rateLimitStillLocked, "while rate-limited the lock stays visible on subsequent fetches")
+let rateLimitRequests = await rateLimitTransport.requests
+check(rateLimitRequests.count == 2, "no extra HTTP calls should be made while the retry-after lock is active")
 
 // Real-world shape observed from the live API: a "limits" array with a
 // model-scoped entry (scope.model.display_name) for extra per-model quotas

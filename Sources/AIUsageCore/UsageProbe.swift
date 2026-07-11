@@ -99,7 +99,16 @@ public struct CommandUsageProbe: UsageProbing {
 
 public enum UsageProbeFactory {
     public static func makeProbes(config: AppConfig, runner: CommandRunning = CommandRunner()) -> [UsageProbing] {
-        config.sources.map { source in
+        // Keep the OAuth cache TTL safely below the refresh interval (not a
+        // fixed 20s) so it tracks the configured interval instead of going
+        // stale when the interval is lowered. 0.8× always stays under
+        // interval - tolerance (tolerance is min(5, 0.1×interval)), so every
+        // periodic tick still re-fetches even if the timer fires a bit early;
+        // rapid extra triggers within the window are deduped to one request.
+        let oauthService = ClaudeOAuthUsageService(
+            cacheTTL: config.refreshIntervalSeconds * 0.8
+        )
+        return config.sources.map { source in
             switch source.mode {
             case .fixture:
                 FixtureUsageProbe(
@@ -131,7 +140,8 @@ public enum UsageProbeFactory {
                     label: source.label,
                     enabled: source.enabled,
                     profile: source.claudeProfile,
-                    quota: source.quota ?? .session
+                    quota: source.quota ?? .session,
+                    service: oauthService
                 )
             case .codexRPC:
                 CodexRPCUsageProbe(
