@@ -358,6 +358,51 @@ check(rateLimitStillLocked, "while rate-limited the lock stays visible on subseq
 let rateLimitRequests = await rateLimitTransport.requests
 check(rateLimitRequests.count == 2, "no extra HTTP calls should be made while the retry-after lock is active")
 
+// Save & Refresh reuses one persistent OAuth service across config applies, so a
+// server rate-limit lock (retryAfter) survives the monitor/probe rebuild instead
+// of being forgotten — reapplying settings can no longer hammer a rate-limited
+// endpoint or silently reset the force throttle.
+let persistProfileID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+let persistStore = MemoryClaudeCredentialStore()
+try persistStore.save(
+    ClaudeOAuthCredentials(
+        accessToken: "persist-access",
+        refreshToken: nil,
+        expiresAtMilliseconds: (Date().timeIntervalSince1970 + 3600) * 1_000
+    ),
+    profileID: persistProfileID
+)
+let persistTransport = QueueHTTPTransport(responses: [
+    HTTPResult(data: Data(), statusCode: 429, headers: ["retry-after": "300"])
+])
+let persistService = ClaudeOAuthUsageService(
+    store: persistStore,
+    transport: persistTransport,
+    cacheTTL: 0,
+    minForceFetchInterval: 0
+)
+do { _ = try await persistService.fetch(profileID: persistProfileID, force: true) } catch {}
+let persistProfile = ClaudeProfile(
+    id: persistProfileID,
+    name: "Persist Profile",
+    accountLabel: "persist@example.invalid"
+)
+let persistSource = SourceConfig(
+    id: "persist-example",
+    label: "PX",
+    enabled: true,
+    mode: .claudeOAuth,
+    command: nil,
+    quota: .session,
+    claudeProfile: persistProfile
+)
+let persistConfig = AppConfig(refreshIntervalSeconds: 30, sources: [persistSource])
+let persistProbes = UsageProbeFactory.makeProbes(config: persistConfig, oauthService: persistService)
+let persistSnapshot = await persistProbes.first!.readUsage()
+check(persistSnapshot.status == .failed, "a rebuilt-but-reused OAuth service keeps the rate-limit lock across a config apply")
+let persistRequests = await persistTransport.requests
+check(persistRequests.count == 1, "reusing the service across a config apply makes no extra HTTP call while still locked")
+
 // Real-world shape observed from the live API: a "limits" array with a
 // model-scoped entry (scope.model.display_name) for extra per-model quotas
 // like a "Fable" weekly cap, alongside the plain session/weekly_all entries.

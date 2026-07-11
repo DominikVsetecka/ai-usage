@@ -8,9 +8,13 @@ public final class UsageMonitor {
 
     private let probes: [UsageProbing]
 
-    public init(config: AppConfig, probes: [UsageProbing]? = nil) {
+    public init(
+        config: AppConfig,
+        probes: [UsageProbing]? = nil,
+        oauthService: ClaudeOAuthUsageService? = nil
+    ) {
         self.refreshIntervalSeconds = config.refreshIntervalSeconds
-        self.probes = probes ?? UsageProbeFactory.makeProbes(config: config)
+        self.probes = probes ?? UsageProbeFactory.makeProbes(config: config, oauthService: oauthService)
         self.snapshots = config.sources.map(UsageSnapshot.idle(from:))
     }
 

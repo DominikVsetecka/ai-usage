@@ -11,6 +11,11 @@ extension Notification.Name {
 final class StatusBarController {
     private let statusItem: NSStatusItem
     private var monitor: UsageMonitor
+    /// One long-lived OAuth service reused across every config apply, so its
+    /// usage cache and rate-limit backoff survive "Save & Refresh" instead of
+    /// being reset by a fresh `UsageMonitor`. Its cache TTL is updated to track
+    /// the current refresh interval whenever config is applied.
+    private let oauthUsageService = ClaudeOAuthUsageService()
     private(set) var config: AppConfig
     private let onOpenSettings: () -> Void
     private var timer: Timer?
@@ -28,7 +33,7 @@ final class StatusBarController {
 
     init(config: AppConfig, onOpenSettings: @escaping () -> Void) {
         self.config = config
-        self.monitor = UsageMonitor(config: config)
+        self.monitor = UsageMonitor(config: config, oauthService: oauthUsageService)
         self.onOpenSettings = onOpenSettings
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.historyStore = UsageHistoryStore(directory: Self.historyDirectory())
@@ -37,6 +42,7 @@ final class StatusBarController {
         scheduleRefresh()
 
         Task {
+            await oauthUsageService.updateCacheTTL(config.refreshIntervalSeconds * 0.8)
             await refreshNow(force: true)
         }
     }
@@ -55,14 +61,17 @@ final class StatusBarController {
 
     func apply(config: AppConfig) {
         self.config = config
-        self.monitor = UsageMonitor(config: config)
+        self.monitor = UsageMonitor(config: config, oauthService: oauthUsageService)
         popoverViewModel?.config = config
         if config.resolvedNotifyOnExtraQuotaUsage {
             ExtraQuotaNotifier.requestAuthorizationIfNeeded()
         }
         render()
         scheduleRefresh()
-        Task { await refreshNow(force: true) }
+        Task {
+            await oauthUsageService.updateCacheTTL(config.refreshIntervalSeconds * 0.8)
+            await refreshNow(force: true)
+        }
     }
 
     private func configureStatusItem() {

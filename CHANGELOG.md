@@ -13,6 +13,7 @@ All notable changes to AI Usage are documented in this file.
 
 - Rapid manual refreshes could trip Claude's usage API rate limit (HTTP 429) and then lock every refresh for several minutes. Manual refresh now has a client-side floor — at most one real network fetch per 10 seconds, extra clicks are served from cache — so button-spamming can no longer trigger the lockout.
 - When Claude's usage API does rate-limit, the value is now shown greyed out (stale, with the retry time) instead of silently freezing the last value while still looking current — so the lock is actually visible rather than looking like "refresh does nothing".
+- Settings "Save & Refresh" now reuses the same usage service instead of rebuilding it, so the 10-second manual-refresh throttle and any active rate-limit backoff survive a settings apply. Previously each apply started a fresh service with an empty cache, so repeatedly pressing Save & Refresh could bypass the throttle and re-hit a rate-limited endpoint.
 
 ## 1.3 — 2026-07-10
 

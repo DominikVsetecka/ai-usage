@@ -98,14 +98,22 @@ public struct CommandUsageProbe: UsageProbing {
 }
 
 public enum UsageProbeFactory {
-    public static func makeProbes(config: AppConfig, runner: CommandRunning = CommandRunner()) -> [UsageProbing] {
-        // Keep the OAuth cache TTL safely below the refresh interval (not a
-        // fixed 20s) so it tracks the configured interval instead of going
-        // stale when the interval is lowered. 0.8× always stays under
-        // interval - tolerance (tolerance is min(5, 0.1×interval)), so every
-        // periodic tick still re-fetches even if the timer fires a bit early;
-        // rapid extra triggers within the window are deduped to one request.
-        let oauthService = ClaudeOAuthUsageService(
+    public static func makeProbes(
+        config: AppConfig,
+        runner: CommandRunning = CommandRunner(),
+        oauthService: ClaudeOAuthUsageService? = nil
+    ) -> [UsageProbing] {
+        // Reuse a caller-provided OAuth service (kept alive across config
+        // applies) so its cache and rate-limit backoff survive a Settings
+        // "Save & Refresh"; only build a throwaway one when none is passed
+        // (tests, one-off Test Connection). Keep the cache TTL safely below the
+        // refresh interval (not a fixed 20s) so it tracks the configured
+        // interval: 0.8× always stays under interval - tolerance (tolerance is
+        // min(5, 0.1×interval)), so every periodic tick still re-fetches even
+        // if the timer fires a bit early; rapid extra triggers within the
+        // window are deduped to one request. A reused service's TTL is updated
+        // by the owner via `updateCacheTTL`, so it is only set here on a fresh one.
+        let oauthUsageService = oauthService ?? ClaudeOAuthUsageService(
             cacheTTL: config.refreshIntervalSeconds * 0.8
         )
         return config.sources.map { source in
@@ -141,7 +149,7 @@ public enum UsageProbeFactory {
                     enabled: source.enabled,
                     profile: source.claudeProfile,
                     quota: source.quota ?? .session,
-                    service: oauthService
+                    service: oauthUsageService
                 )
             case .codexRPC:
                 CodexRPCUsageProbe(

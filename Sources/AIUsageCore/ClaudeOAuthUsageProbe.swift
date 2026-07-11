@@ -47,7 +47,7 @@ public actor ClaudeOAuthUsageService {
 
     private let store: any ClaudeCredentialStoring
     private let transport: any HTTPTransporting
-    private let cacheTTL: TimeInterval
+    private var cacheTTL: TimeInterval
     /// Client-side floor on how often a *forced* (manual) refresh may actually
     /// hit the network. Forced fetches bypass the normal `cacheTTL`, but never
     /// fetch more than once per this interval — spamming the refresh button
@@ -126,6 +126,15 @@ public actor ClaudeOAuthUsageService {
     public func clearCache(profileID: UUID) {
         cache[profileID] = nil
         retryAfter[profileID] = nil
+    }
+
+    /// Update the non-forced cache TTL in place. Lets a long-lived service
+    /// (reused across config applies, e.g. Settings "Save & Refresh") track a
+    /// changed refresh interval without discarding its cache or its active
+    /// rate-limit backoff — so reapplying settings can't hammer a rate-limited
+    /// endpoint or reset the force throttle.
+    public func updateCacheTTL(_ ttl: TimeInterval) {
+        cacheTTL = ttl
     }
 
     public static func parseUsageResponse(_ data: Data) throws -> ClaudeUsageResult {
