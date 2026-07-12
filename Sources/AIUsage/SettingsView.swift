@@ -109,25 +109,20 @@ struct SettingsView: View {
 
     private var generalPanel: some View {
         Form {
-            Section("General") {
+            Section {
                 Picker("Refresh interval", selection: $draft.refreshIntervalSeconds) {
-                    Text("30 seconds").tag(TimeInterval(30))
                     Text("1 minute").tag(TimeInterval(60))
                     Text("2 minutes").tag(TimeInterval(120))
                     Text("5 minutes").tag(TimeInterval(300))
                 }
                 .pickerStyle(.menu)
-                .onAppear {
-                    // Legacy configs may still hold the removed 15s interval;
-                    // snap them up to the new 30s minimum so the picker shows
-                    // a valid selection instead of a blank one.
-                    if draft.refreshIntervalSeconds < 30 {
-                        draft.refreshIntervalSeconds = 30
-                    }
-                }
 
                 Toggle("Remaining countdown (100% to 0%)", isOn: remainingCountdownBinding)
                     .help("Show how much quota is left instead of how much is used — affects both the menu bar and the popover.")
+            } header: {
+                Text("General")
+            } footer: {
+                Text("This is exactly how often Claude usage is actually checked over the network — not a display-only tick with a longer cache behind it. A manual refresh always checks immediately, at most once every 10 seconds.")
             }
         }
         .formStyle(.grouped)
@@ -901,7 +896,7 @@ private struct ProviderSettingsSection: View {
                 claudeProfile: source.claudeProfile
             )
             let probes = UsageProbeFactory.makeProbes(config: AppConfig(
-                refreshIntervalSeconds: 30,
+                refreshIntervalSeconds: 60,
                 sources: [testSource]
             ))
             guard let probe = probes.first else {

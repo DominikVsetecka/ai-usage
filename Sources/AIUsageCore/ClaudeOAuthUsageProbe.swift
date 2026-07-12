@@ -47,7 +47,14 @@ public actor ClaudeOAuthUsageService {
 
     private let store: any ClaudeCredentialStoring
     private let transport: any HTTPTransporting
-    private let cacheTTL: TimeInterval
+    /// How long a successful fetch is served from cache before a *periodic*
+    /// (non-forced) refresh hits the network again. By explicit design this is
+    /// kept exactly equal to the user's configured Settings refresh interval —
+    /// see `updateCacheTTL(_:)` — so "1 minute" in Settings really means a real
+    /// network check every 1 minute, not a display-only tick with a longer,
+    /// invisible cache behind it. A manual/Save & Refresh force always bypasses
+    /// this immediately (subject only to `minForceFetchInterval`).
+    private var cacheTTL: TimeInterval
     /// Client-side floor on how often a *forced* (manual) refresh may actually
     /// hit the network. Forced fetches bypass the normal `cacheTTL`, but never
     /// fetch more than once per this interval — spamming the refresh button
@@ -70,16 +77,11 @@ public actor ClaudeOAuthUsageService {
     private var logLoaded = false
     private static let logLimit = 100
 
-    /// The 5-hour/weekly usage windows barely move on a 20-30s cadence, so the
-    /// periodic (non-forced) refresh has no real need to hit the network more
-    /// often than this — this is the original v1.3/DEC-0006 design value.
-    /// Deliberately decoupled from the configurable UI refresh interval: that
-    /// interval controls how often the *display* re-renders and the other
-    /// (non-shared-endpoint) probes are polled, not how often this
-    /// account-rate-limited endpoint is actually hit. A manual/Save & Refresh
-    /// force still bypasses this (subject only to `minForceFetchInterval`), so
-    /// on-demand freshness is unaffected.
-    public static let defaultCacheTTL: TimeInterval = 15 * 60
+    /// Fallback used only when a caller never calls `updateCacheTTL(_:)` (e.g.
+    /// direct/test construction). The running app always syncs this to the
+    /// configured refresh interval right after construction and on every
+    /// Settings apply, so this value is never actually in effect there.
+    public static let defaultCacheTTL: TimeInterval = 60
 
     public init(
         store: any ClaudeCredentialStoring = KeychainClaudeCredentialStore(),
@@ -223,6 +225,15 @@ public actor ClaudeOAuthUsageService {
         cache[profileID] = nil
         retryAfter[profileID] = nil
         rateLimitStreak[profileID] = nil
+    }
+
+    /// Keeps the periodic cache TTL exactly equal to the user's configured
+    /// Settings refresh interval — called right after construction and again
+    /// on every Settings apply, so changing the interval takes effect
+    /// immediately without discarding the cache or any active rate-limit
+    /// backoff (unlike rebuilding the service from scratch).
+    public func updateCacheTTL(_ ttl: TimeInterval) {
+        cacheTTL = ttl
     }
 
     public static func parseUsageResponse(_ data: Data) throws -> ClaudeUsageResult {

@@ -52,14 +52,14 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) -> Bool {
 }
 
 let config = AppConfig.default
-check(config.refreshIntervalSeconds == 30, "default refresh should be 30s")
-// Regression guard for the actual root cause of a real rate-limit episode: this
-// was silently dropped from 15 minutes to 20 seconds between v1.3 and v1.4,
-// which meant almost every periodic tick made a real network call instead of
-// serving from cache — a ~45x jump in request rate against an account-level
-// limit. It must stay long and decoupled from the (much shorter) UI refresh
-// interval; see DEC-0006 and ORB-0134.
-check(ClaudeOAuthUsageService.defaultCacheTTL == 15 * 60, "Claude OAuth cache TTL must default to 15 minutes, not a short interval-coupled value")
+check(config.refreshIntervalSeconds == 60, "default refresh should be 60s (1 minute is the new minimum)")
+// Regression guard for the refresh-interval floor: after a real rate-limit
+// episode, the minimum was raised from 30s to 60s (ORB-0134) to reduce request
+// rate against an account-level limit, by explicit user choice to keep the
+// Claude OAuth cache TTL exactly equal to the configured interval (no
+// separate/longer decoupled cache) rather than a bigger hidden cache window.
+check(AppConfig(refreshIntervalSeconds: 10, sources: []).refreshIntervalSeconds == 60, "refresh interval must floor at 60s even if a caller asks for less")
+check(AppConfig(refreshIntervalSeconds: 120, sources: []).refreshIntervalSeconds == 120, "refresh interval above the floor is left untouched")
 check(config.showsRemainingCountdown == false, "remaining countdown should default off")
 check(config.resolvedVisualHistoryStyle == .bars, "history style should default to bars")
 check(config.sources.map(\.label) == ["C1", "C2", "GPT"], "default labels should be C1/C2/GPT")
@@ -84,6 +84,20 @@ check(reloadedConfig == countdownConfig, "saved settings should load without cha
 check(reloadedConfig.showsRemainingCountdown, "countdown setting should persist")
 check(reloadedConfig.resolvedVisualHistoryStyle == .line, "history style should persist")
 try? FileManager.default.removeItem(at: temporaryConfigURL)
+
+// A config saved before the 60s floor existed (e.g. an old 15s/30s value) is
+// decoded via Codable's synthesized init, which bypasses the custom
+// initializer's clamp entirely — `normalized()` must catch this too, not just
+// fresh construction, otherwise a legacy on-disk config would keep running at
+// the old, faster (rate-limit-prone) interval forever.
+let legacyConfigURL = FileManager.default.temporaryDirectory
+    .appendingPathComponent("ai-usage-check-legacy-config.json")
+var legacyJSON = try JSONSerialization.jsonObject(with: try JSONEncoder().encode(config)) as! [String: Any]
+legacyJSON["refreshIntervalSeconds"] = 15
+try JSONSerialization.data(withJSONObject: legacyJSON).write(to: legacyConfigURL)
+let migratedConfig = try AppConfig.load(from: legacyConfigURL)
+check(migratedConfig.refreshIntervalSeconds == 60, "a legacy on-disk config below the 60s floor migrates up on load")
+try? FileManager.default.removeItem(at: legacyConfigURL)
 
 let snapshots = [
     UsageSnapshot(sourceID: "claude1", label: "C1", enabled: true, percentUsed: 43, status: .ok, updatedAt: nil, errorMessage: nil),

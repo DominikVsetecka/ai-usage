@@ -13,12 +13,11 @@ final class StatusBarController {
     private var monitor: UsageMonitor
     /// One long-lived OAuth service reused across every config apply, so its
     /// usage cache and rate-limit backoff survive "Save & Refresh" instead of
-    /// being reset by a fresh `UsageMonitor`. Uses the default long cache TTL
-    /// (`ClaudeOAuthUsageService.defaultCacheTTL`, 15 minutes) regardless of the
-    /// UI refresh interval — periodic (non-forced) ticks mostly re-render from
-    /// cache; a manual/Save & Refresh force still bypasses it. This matches the
-    /// original v1.3 design: the account-rate-limited endpoint should almost
-    /// never be hit by the automatic timer.
+    /// being reset by a fresh `UsageMonitor`. Its cache TTL is kept exactly
+    /// equal to `config.refreshIntervalSeconds` (see `updateCacheTTL` calls in
+    /// init/apply below) — by explicit design, what's configured in Settings is
+    /// the real network-check cadence, not a display-only tick with a longer,
+    /// separate cache underneath.
     private let oauthUsageService = ClaudeOAuthUsageService(logURL: StatusBarController.fetchLogURL())
     private(set) var config: AppConfig
     private let onOpenSettings: () -> Void
@@ -54,6 +53,7 @@ final class StatusBarController {
         scheduleRefresh()
 
         Task {
+            await oauthUsageService.updateCacheTTL(config.refreshIntervalSeconds)
             await refreshNow(force: true, trigger: "startup")
         }
     }
@@ -95,6 +95,7 @@ final class StatusBarController {
         render()
         scheduleRefresh()
         Task {
+            await oauthUsageService.updateCacheTTL(config.refreshIntervalSeconds)
             await refreshNow(force: true, trigger: "settings-apply")
         }
     }

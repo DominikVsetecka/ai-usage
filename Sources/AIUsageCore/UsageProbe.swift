@@ -106,10 +106,10 @@ public enum UsageProbeFactory {
         // Reuse a caller-provided OAuth service (kept alive across config
         // applies) so its cache and rate-limit backoff survive a Settings
         // "Save & Refresh"; only build a throwaway one when none is passed
-        // (tests, one-off Test Connection) — using the long-lived default TTL
-        // (see `ClaudeOAuthUsageService.defaultCacheTTL`), deliberately NOT
-        // coupled to the UI refresh interval.
-        let oauthUsageService = oauthService ?? ClaudeOAuthUsageService()
+        // (tests, one-off Test Connection) — set to the configured refresh
+        // interval exactly, so the periodic cache TTL matches what Settings
+        // says even for this one-off case.
+        let oauthUsageService = oauthService ?? ClaudeOAuthUsageService(cacheTTL: config.refreshIntervalSeconds)
         return config.sources.map { source in
             switch source.mode {
             case .fixture:
