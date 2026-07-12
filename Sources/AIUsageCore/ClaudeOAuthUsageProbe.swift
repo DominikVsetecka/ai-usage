@@ -56,6 +56,10 @@ public actor ClaudeOAuthUsageService {
     private let minForceFetchInterval: TimeInterval
     private var cache: [UUID: CacheEntry] = [:]
     private var retryAfter: [UUID: Date] = [:]
+    /// Consecutive 429s per profile, driving an exponential backoff so a
+    /// persistent rate-limit isn't retried every interval (which would keep
+    /// tripping it and re-surfacing the error). Reset on any successful fetch.
+    private var rateLimitStreak: [UUID: Int] = [:]
 
     public init(
         store: any ClaudeCredentialStoring = KeychainClaudeCredentialStore(),
@@ -105,8 +109,15 @@ public actor ClaudeOAuthUsageService {
         }
 
         if response.statusCode == 429 {
-            let delay = TimeInterval(response.headers["retry-after"].flatMap(Double.init) ?? 300)
-            let date = now.addingTimeInterval(max(30, delay))
+            // Exponential backoff on consecutive 429s: 60s, 120s, 240s, ... capped
+            // at 15 minutes, so a persistent limit isn't retried every interval
+            // (which just keeps tripping it). A server-provided Retry-After still
+            // wins when it asks for longer.
+            let attempts = (rateLimitStreak[profileID] ?? 0) + 1
+            rateLimitStreak[profileID] = attempts
+            let exponential = min(900, 60 * pow(2, Double(attempts - 1)))
+            let serverDelay = response.headers["retry-after"].flatMap(Double.init) ?? 0
+            let date = now.addingTimeInterval(max(exponential, serverDelay))
             retryAfter[profileID] = date
             throw ClaudeOAuthUsageError.rateLimited(date)
         }
@@ -120,12 +131,14 @@ public actor ClaudeOAuthUsageService {
         let result = try Self.parseUsageResponse(response.data)
         cache[profileID] = CacheEntry(result: result, storedAt: now)
         retryAfter[profileID] = nil
+        rateLimitStreak[profileID] = nil
         return result
     }
 
     public func clearCache(profileID: UUID) {
         cache[profileID] = nil
         retryAfter[profileID] = nil
+        rateLimitStreak[profileID] = nil
     }
 
     /// Update the non-forced cache TTL in place. Lets a long-lived service

@@ -24,6 +24,7 @@ All notable changes to AI Usage are documented in this file.
 - The extra-quota (Fable) notification no longer fires on every app restart. Pre-existing usage seen for the first time now only establishes a baseline; a notification requires an actual observed increase, gated by the 30-minute quiet period (which now survives restarts when state-remembering is on).
 - A window jumping straight past the threshold to 100% now sends only the "limit reached" alert instead of both the threshold and limit notifications at once.
 - The login-expired notification now also recognizes the Claude CLI "not logged in" state, and no longer misfires for a source that simply hasn't been set up yet.
+- Rate-limit backoff is now exponential (60s → 120s → … capped at 15 min, resetting on the next success) instead of a flat retry, so a persistent 429 is no longer retried every interval — which kept re-tripping the limit and re-surfacing the error. A server-provided Retry-After still wins when it asks for longer.
 
 ## 1.4 — 2026-07-11
 

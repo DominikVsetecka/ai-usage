@@ -358,6 +358,37 @@ check(rateLimitStillLocked, "while rate-limited the lock stays visible on subseq
 let rateLimitRequests = await rateLimitTransport.requests
 check(rateLimitRequests.count == 2, "no extra HTTP calls should be made while the retry-after lock is active")
 
+// Backoff floor: a 429 with no Retry-After header now waits at least the ~60s
+// exponential floor rather than a tight retry, so a persistent limit isn't
+// hammered (and re-surfaced) every refresh interval.
+let backoffProfileID = UUID()
+let backoffStore = MemoryClaudeCredentialStore()
+try backoffStore.save(
+    ClaudeOAuthCredentials(
+        accessToken: "backoff-access",
+        refreshToken: nil,
+        expiresAtMilliseconds: (Date().timeIntervalSince1970 + 3600) * 1_000
+    ),
+    profileID: backoffProfileID
+)
+let backoffTransport = QueueHTTPTransport(responses: [
+    HTTPResult(data: Data(), statusCode: 429)
+])
+let backoffService = ClaudeOAuthUsageService(
+    store: backoffStore,
+    transport: backoffTransport,
+    cacheTTL: 0,
+    minForceFetchInterval: 0
+)
+var backoffDate: Date?
+do {
+    _ = try await backoffService.fetch(profileID: backoffProfileID, force: true)
+} catch let error as ClaudeOAuthUsageError {
+    if case .rateLimited(let date) = error { backoffDate = date }
+} catch {}
+check(backoffDate != nil, "a headerless 429 still surfaces as rateLimited")
+check((backoffDate?.timeIntervalSinceNow ?? 0) >= 55, "a headerless 429 backs off at least ~60s, not a tight interval retry")
+
 // Save & Refresh reuses one persistent OAuth service across config applies, so a
 // server rate-limit lock (retryAfter) survives the monitor/probe rebuild instead
 // of being forgotten — reapplying settings can no longer hammer a rate-limited
