@@ -300,13 +300,16 @@ final class StatusBarController {
 
     private static func isAuthError(_ message: String?) -> Bool {
         guard let message = message?.lowercased() else { return false }
+        // Match genuine "your login stopped working" cases across OAuth and CLI.
+        // Deliberately excludes the never-configured case ("Import a Claude Code
+        // account in Settings"), which is a setup prompt, not an expired login.
         return message.contains("session expired")
-            || message.contains("log in")
-            || message.contains("credentials are missing")
             || message.contains("no longer valid")
-            || message.contains("authenticat")
-            || message.contains("import a claude")
-            || message.contains("import this profile")
+            || message.contains("credentials are missing")
+            || message.contains("import this profile")   // OAuth session-expired guidance
+            || message.contains("logged in")             // CLI "(not) logged in"
+            || message.contains("please log in")
+            || message.contains("login required")
     }
 
     private func render() {

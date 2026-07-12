@@ -70,12 +70,17 @@ public enum NotificationRules {
             return [.reset]
         }
 
+        // Reaching 100% is the harder, more specific event, so when a tick
+        // crosses straight past the threshold to the limit (e.g. 88 -> 100),
+        // report only "limit reached" rather than firing both at once.
+        let hitLimit = limitEnabled && previous < 100 && currentPercent >= 100
+        if hitLimit {
+            return [.limitReached]
+        }
+
         var out: [StandardWindowNotification] = []
         if thresholdEnabled, previous < thresholdPercentUsed, currentPercent >= thresholdPercentUsed {
             out.append(.thresholdCrossed)
-        }
-        if limitEnabled, previous < 100, currentPercent >= 100 {
-            out.append(.limitReached)
         }
         return out
     }

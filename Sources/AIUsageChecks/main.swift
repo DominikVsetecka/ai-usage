@@ -718,6 +718,12 @@ let hitLimit = NotificationRules.evaluateStandardWindow(
 )
 check(hitLimit == [.limitReached], "limit fires when the window reaches 100%")
 
+let jumpPastThresholdToLimit = NotificationRules.evaluateStandardWindow(
+    previousPercent: 88, currentPercent: 100,
+    thresholdEnabled: true, thresholdPercentUsed: 90, limitEnabled: true, resetEnabled: true
+)
+check(jumpPastThresholdToLimit == [.limitReached], "jumping straight to 100% reports only the limit, not also the threshold")
+
 let didReset = NotificationRules.evaluateStandardWindow(
     previousPercent: 80, currentPercent: 1,
     thresholdEnabled: true, thresholdPercentUsed: 90, limitEnabled: true, resetEnabled: true
