@@ -53,6 +53,13 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) -> Bool {
 
 let config = AppConfig.default
 check(config.refreshIntervalSeconds == 30, "default refresh should be 30s")
+// Regression guard for the actual root cause of a real rate-limit episode: this
+// was silently dropped from 15 minutes to 20 seconds between v1.3 and v1.4,
+// which meant almost every periodic tick made a real network call instead of
+// serving from cache — a ~45x jump in request rate against an account-level
+// limit. It must stay long and decoupled from the (much shorter) UI refresh
+// interval; see DEC-0006 and ORB-0134.
+check(ClaudeOAuthUsageService.defaultCacheTTL == 15 * 60, "Claude OAuth cache TTL must default to 15 minutes, not a short interval-coupled value")
 check(config.showsRemainingCountdown == false, "remaining countdown should default off")
 check(config.resolvedVisualHistoryStyle == .bars, "history style should default to bars")
 check(config.sources.map(\.label) == ["C1", "C2", "GPT"], "default labels should be C1/C2/GPT")

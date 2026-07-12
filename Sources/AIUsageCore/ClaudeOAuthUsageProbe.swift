@@ -47,7 +47,7 @@ public actor ClaudeOAuthUsageService {
 
     private let store: any ClaudeCredentialStoring
     private let transport: any HTTPTransporting
-    private var cacheTTL: TimeInterval
+    private let cacheTTL: TimeInterval
     /// Client-side floor on how often a *forced* (manual) refresh may actually
     /// hit the network. Forced fetches bypass the normal `cacheTTL`, but never
     /// fetch more than once per this interval — spamming the refresh button
@@ -70,10 +70,21 @@ public actor ClaudeOAuthUsageService {
     private var logLoaded = false
     private static let logLimit = 100
 
+    /// The 5-hour/weekly usage windows barely move on a 20-30s cadence, so the
+    /// periodic (non-forced) refresh has no real need to hit the network more
+    /// often than this — this is the original v1.3/DEC-0006 design value.
+    /// Deliberately decoupled from the configurable UI refresh interval: that
+    /// interval controls how often the *display* re-renders and the other
+    /// (non-shared-endpoint) probes are polled, not how often this
+    /// account-rate-limited endpoint is actually hit. A manual/Save & Refresh
+    /// force still bypasses this (subject only to `minForceFetchInterval`), so
+    /// on-demand freshness is unaffected.
+    public static let defaultCacheTTL: TimeInterval = 15 * 60
+
     public init(
         store: any ClaudeCredentialStoring = KeychainClaudeCredentialStore(),
         transport: any HTTPTransporting = URLSessionHTTPTransport(),
-        cacheTTL: TimeInterval = 20,
+        cacheTTL: TimeInterval = ClaudeOAuthUsageService.defaultCacheTTL,
         minForceFetchInterval: TimeInterval = 10,
         logURL: URL? = nil
     ) {
@@ -212,15 +223,6 @@ public actor ClaudeOAuthUsageService {
         cache[profileID] = nil
         retryAfter[profileID] = nil
         rateLimitStreak[profileID] = nil
-    }
-
-    /// Update the non-forced cache TTL in place. Lets a long-lived service
-    /// (reused across config applies, e.g. Settings "Save & Refresh") track a
-    /// changed refresh interval without discarding its cache or its active
-    /// rate-limit backoff — so reapplying settings can't hammer a rate-limited
-    /// endpoint or reset the force throttle.
-    public func updateCacheTTL(_ ttl: TimeInterval) {
-        cacheTTL = ttl
     }
 
     public static func parseUsageResponse(_ data: Data) throws -> ClaudeUsageResult {

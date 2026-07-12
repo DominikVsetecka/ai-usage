@@ -19,6 +19,7 @@ All notable changes to AI Usage are documented in this file.
 ### Fixed
 
 - Rate-limit backoff no longer fully resets after a single successful fetch. Diagnostic logging captured a real case where the account was hitting a persistently tight server-side limit (roughly every other 30s refresh got a 429) — a lone success in between kept snapping the backoff straight back to its 60s floor, so the app just kept re-tripping the same limit at the tightest possible cadence. The streak now decays by one step on success instead, so a 429 that recurs right after one clean fetch still escalates the wait (120s, 240s, ...) instead of resetting.
+- **Found the actual root cause of the rate-limit problem, and it predates all of the above:** the Claude usage cache had been silently shortened from 15 minutes to 20 seconds shortly before v1.4, which meant almost every periodic refresh tick made a real network call instead of serving from cache — roughly a 45x jump in request rate against an account-level limit. (v1.4's "couple the cache TTL to the refresh interval" change didn't fix this — at the 30s default it only worked out to ~24s, essentially the same broken behavior.) The cache is now back to a 15-minute default, matching the original v1.3 design, and is deliberately decoupled from the UI refresh interval: the 5-hour/weekly usage windows don't meaningfully change on a 20-30s cadence anyway. A manual refresh (or Save & Refresh) still bypasses the cache immediately, subject only to the existing 10s floor.
 
 ### Changed
 
