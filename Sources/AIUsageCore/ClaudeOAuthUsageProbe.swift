@@ -165,9 +165,8 @@ public actor ClaudeOAuthUsageService {
             // wins when it asks for longer.
             let attempts = (rateLimitStreak[profileID] ?? 0) + 1
             rateLimitStreak[profileID] = attempts
-            let exponential = min(900, 60 * pow(2, Double(attempts - 1)))
             let serverDelay = response.headers["retry-after"].flatMap(Double.init) ?? 0
-            let backoff = max(exponential, serverDelay)
+            let backoff = Self.backoffSeconds(streak: attempts, serverRetryAfter: serverDelay)
             let date = now.addingTimeInterval(backoff)
             retryAfter[profileID] = date
             logEvent("usage \(tag) \(mode) -> 429 RATE-LIMITED, backoff \(Int(backoff))s (streak \(attempts), server retry-after \(serverDelay > 0 ? "\(Int(serverDelay))s" : "none"))")
@@ -184,9 +183,29 @@ public actor ClaudeOAuthUsageService {
         let result = try Self.parseUsageResponse(response.data)
         cache[profileID] = CacheEntry(result: result, storedAt: now)
         retryAfter[profileID] = nil
-        rateLimitStreak[profileID] = nil
+        rateLimitStreak[profileID] = Self.decayedStreak(rateLimitStreak[profileID])
         logEvent("usage \(tag) \(mode) -> 200 OK")
         return result
+    }
+
+    /// Exponential backoff for the Nth consecutive 429: 60s, 120s, 240s, ...
+    /// capped at 15 minutes. A server-provided Retry-After still wins when it
+    /// asks for longer than the computed exponential wait.
+    public static func backoffSeconds(streak: Int, serverRetryAfter: TimeInterval) -> TimeInterval {
+        let exponential = min(900, 60 * pow(2, Double(max(1, streak) - 1)))
+        return max(exponential, serverRetryAfter)
+    }
+
+    /// Decays the consecutive-429 streak by one step on a success, rather than
+    /// snapping it to zero. Live data showed a persistently tight server-side
+    /// limit where a single success is often immediately followed by another
+    /// 429 — a hard reset kept dropping the backoff straight back to its 60s
+    /// floor every time, so the app just kept re-tripping the same limit. A
+    /// one-off success still recovers over a couple of clean fetches, but a
+    /// limit that's still actually tight keeps getting a growing wait.
+    public static func decayedStreak(_ previous: Int?) -> Int? {
+        guard let previous, previous > 1 else { return nil }
+        return previous - 1
     }
 
     public func clearCache(profileID: UUID) {

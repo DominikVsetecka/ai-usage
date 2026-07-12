@@ -16,6 +16,10 @@ All notable changes to AI Usage are documented in this file.
 - "Remember notification state across restarts" — persists the quiet-period timers and last-seen levels to `~/.ai-usage/notify-state.json`, so restarting the app never re-triggers a notification on its own.
 - Diagnostic fetch log at `~/.ai-usage/fetch-log.txt` (last 100 lines): every Claude usage fetch with a timestamp, the refresh trigger (timer/startup/manual/settings-apply), whether it was a cache hit or a real network call, the interval since the last real fetch, and any 429 with its backoff — for troubleshooting refresh timing and rate-limits.
 
+### Fixed
+
+- Rate-limit backoff no longer fully resets after a single successful fetch. Diagnostic logging captured a real case where the account was hitting a persistently tight server-side limit (roughly every other 30s refresh got a 429) — a lone success in between kept snapping the backoff straight back to its 60s floor, so the app just kept re-tripping the same limit at the tightest possible cadence. The streak now decays by one step on success instead, so a 429 that recurs right after one clean fetch still escalates the wait (120s, 240s, ...) instead of resetting.
+
 ### Changed
 
 - Settings were reorganized from three crowded tabs into a macOS-style left sidebar with focused panels: General, Menu Bar, Popover, Notifications, Connections, History, About.

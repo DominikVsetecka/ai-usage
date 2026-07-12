@@ -389,6 +389,26 @@ do {
 check(backoffDate != nil, "a headerless 429 still surfaces as rateLimited")
 check((backoffDate?.timeIntervalSinceNow ?? 0) >= 55, "a headerless 429 backs off at least ~60s, not a tight interval retry")
 
+// Backoff/decay math (pure, no wall-clock or transport involved): live data
+// showed a persistently tight server-side limit where a lone success is often
+// immediately followed by another 429. A hard reset-to-zero on that success
+// kept dropping the backoff straight back to its 60s floor every time, so the
+// app just kept re-tripping the same limit at the tightest possible cadence.
+check(ClaudeOAuthUsageService.backoffSeconds(streak: 1, serverRetryAfter: 0) == 60, "1st consecutive 429 backs off 60s")
+check(ClaudeOAuthUsageService.backoffSeconds(streak: 2, serverRetryAfter: 0) == 120, "2nd consecutive 429 escalates to 120s")
+check(ClaudeOAuthUsageService.backoffSeconds(streak: 5, serverRetryAfter: 0) == 900, "backoff caps at 15 minutes")
+check(ClaudeOAuthUsageService.backoffSeconds(streak: 1, serverRetryAfter: 300) == 300, "a longer server Retry-After still wins over the computed exponential wait")
+
+check(ClaudeOAuthUsageService.decayedStreak(nil) == nil, "no streak stays nil on a success")
+check(ClaudeOAuthUsageService.decayedStreak(1) == nil, "a streak of 1 fully clears on a success")
+check(ClaudeOAuthUsageService.decayedStreak(2) == 1, "a streak of 2 decays by one step, not to zero")
+check(ClaudeOAuthUsageService.decayedStreak(3) == 2, "a streak of 3 decays by one step")
+// The scenario actually observed live: 429, 429 (streak 2), success (decays to
+// 1, not 0), 429 again — the next backoff must still be escalated (120s), not
+// dropped back to the 60s floor.
+let observedStreakAfterDecay = ClaudeOAuthUsageService.decayedStreak(2)! + 1
+check(ClaudeOAuthUsageService.backoffSeconds(streak: observedStreakAfterDecay, serverRetryAfter: 0) == 120, "a 429 right after one intervening success still escalates instead of resetting to the 60s floor")
+
 // Save & Refresh reuses one persistent OAuth service across config applies, so a
 // server rate-limit lock (retryAfter) survives the monitor/probe rebuild instead
 // of being forgotten — reapplying settings can no longer hammer a rate-limited
