@@ -11,9 +11,45 @@ struct SettingsView: View {
     let onSave: (AppConfig) -> Void
     let onCancel: () -> Void
 
-    @State private var selectedTab: SettingsTab = .settings
+    @State private var selectedPanelID: String = SettingsPanel.general.id
 
-    enum SettingsTab { case settings, history, info }
+    enum SettingsPanel: String, CaseIterable, Identifiable {
+        case general, menuBar, popover, notifications, connections, history, about
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .general: "General"
+            case .menuBar: "Menu Bar"
+            case .popover: "Popover"
+            case .notifications: "Notifications"
+            case .connections: "Connections"
+            case .history: "History"
+            case .about: "About"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .general: "gearshape"
+            case .menuBar: "menubar.rectangle"
+            case .popover: "rectangle.on.rectangle"
+            case .notifications: "bell.badge"
+            case .connections: "link"
+            case .history: "chart.line.uptrend.xyaxis"
+            case .about: "info.circle"
+            }
+        }
+    }
+
+    private var currentPanel: SettingsPanel { SettingsPanel(rawValue: selectedPanelID) ?? .general }
+
+    private var sidebarSelection: Binding<String?> {
+        Binding(
+            get: { selectedPanelID },
+            set: { selectedPanelID = $0 ?? SettingsPanel.general.id }
+        )
+    }
 
     init(
         config: AppConfig,
@@ -30,56 +66,76 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            settingsContent
-                .tabItem { Label("Settings", systemImage: "gearshape") }
-                .tag(SettingsTab.settings)
-
-            HistoryView(historyStore: historyStore, config: draft)
-                .tabItem { Label("History", systemImage: "chart.line.uptrend.xyaxis") }
-                .tag(SettingsTab.history)
-
-            InfoView()
-                .tabItem { Label("Info", systemImage: "info.circle") }
-                .tag(SettingsTab.info)
+        NavigationSplitView {
+            List(SettingsPanel.allCases, selection: sidebarSelection) { panel in
+                Label(panel.title, systemImage: panel.icon)
+                    .tag(panel.id)
+            }
+            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+        } detail: {
+            VStack(spacing: 0) {
+                detailContent
+                Divider()
+                footer
+            }
         }
-        .frame(minWidth: 660, minHeight: 660)
+        .frame(minWidth: 820, minHeight: 640)
     }
 
-    private var settingsContent: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section("General") {
-                    Picker("Refresh interval", selection: $draft.refreshIntervalSeconds) {
-                        Text("30 seconds").tag(TimeInterval(30))
-                        Text("1 minute").tag(TimeInterval(60))
-                        Text("2 minutes").tag(TimeInterval(120))
-                        Text("5 minutes").tag(TimeInterval(300))
-                    }
-                    .pickerStyle(.menu)
-                    .onAppear {
-                        // Legacy configs may still hold the removed 15s interval;
-                        // snap them up to the new 30s minimum so the picker shows
-                        // a valid selection instead of a blank one.
-                        if draft.refreshIntervalSeconds < 30 {
-                            draft.refreshIntervalSeconds = 30
-                        }
-                    }
+    @ViewBuilder private var detailContent: some View {
+        switch currentPanel {
+        case .general: generalPanel
+        case .menuBar: menuBarPanel
+        case .popover: popoverPanel
+        case .notifications: notificationsPanel
+        case .connections: connectionsPanel
+        case .history: HistoryView(historyStore: historyStore, config: draft)
+        case .about: InfoView()
+        }
+    }
 
-                    Toggle("Remaining countdown (100% to 0%)", isOn: remainingCountdownBinding)
-                        .help("Show how much quota is left instead of how much is used — affects both the menu bar and the popover.")
+    private var footer: some View {
+        HStack {
+            Spacer()
+            Button("Cancel", action: onCancel)
+                .keyboardShortcut(.cancelAction)
+            Button("Save & Refresh") {
+                onSave(draft)
+            }
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(16)
+    }
 
-                    Toggle("Notify when an extra quota starts being used", isOn: notifyOnExtraQuotaUsageBinding)
-                        .help("Shows a brief system notification the first time a model-scoped extra quota (e.g. a \"Fable\" cap) gains usage after being quiet for 30+ minutes — a heads-up in case you didn't notice you'd switched models.")
-
-                    if draft.resolvedNotifyOnExtraQuotaUsage {
-                        Button("Show demo notification") {
-                            ExtraQuotaNotifier.sendDemoNotification()
-                        }
+    private var generalPanel: some View {
+        Form {
+            Section("General") {
+                Picker("Refresh interval", selection: $draft.refreshIntervalSeconds) {
+                    Text("30 seconds").tag(TimeInterval(30))
+                    Text("1 minute").tag(TimeInterval(60))
+                    Text("2 minutes").tag(TimeInterval(120))
+                    Text("5 minutes").tag(TimeInterval(300))
+                }
+                .pickerStyle(.menu)
+                .onAppear {
+                    // Legacy configs may still hold the removed 15s interval;
+                    // snap them up to the new 30s minimum so the picker shows
+                    // a valid selection instead of a blank one.
+                    if draft.refreshIntervalSeconds < 30 {
+                        draft.refreshIntervalSeconds = 30
                     }
                 }
 
-                Section {
+                Toggle("Remaining countdown (100% to 0%)", isOn: remainingCountdownBinding)
+                    .help("Show how much quota is left instead of how much is used — affects both the menu bar and the popover.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var menuBarPanel: some View {
+        Form {
+            Section {
                     Picker("Font size", selection: $draft.menuBarFontSize) {
                         Text("System (\(Int(NSFont.systemFontSize))pt)").tag(Optional<CGFloat>.none)
                         Text("11pt").tag(Optional<CGFloat>.some(11))
@@ -111,7 +167,12 @@ struct SettingsView: View {
                 } footer: {
                     Text("How the percentage text looks in the macOS menu bar.")
                 }
+            }
+        .formStyle(.grouped)
+    }
 
+    private var popoverPanel: some View {
+        Form {
                 Section {
                     VisualBarPreviewRow(config: draft)
                         .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
@@ -233,32 +294,118 @@ struct SettingsView: View {
                 } footer: {
                     Text("How the usage bars in the click-to-open popover look: the fill shows the current cycle, the history shows past updates.")
                 }
+            }
+        .formStyle(.grouped)
+    }
 
-                ForEach(draft.sources.indices, id: \.self) { index in
-                    ProviderSettingsSection(
-                        source: $draft.sources[index],
-                        snapshot: latestSnapshots.first(where: { $0.sourceID == draft.sources[index].id })
-                    )
-                }
+    private var connectionsPanel: some View {
+        Form {
+            ForEach(draft.sources.indices, id: \.self) { index in
+                ProviderSettingsSection(
+                    source: $draft.sources[index],
+                    snapshot: latestSnapshots.first(where: { $0.sourceID == draft.sources[index].id })
+                )
             }
-            .formStyle(.grouped)
-            .onReceive(NotificationCenter.default.publisher(for: .aiUsageSnapshotsDidUpdate)) { notification in
-                guard let snapshots = notification.object as? [UsageSnapshot] else { return }
-                latestSnapshots = snapshots
-            }
-
-            Divider()
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                Button("Save & Refresh") {
-                    onSave(draft)
-                }
-                .keyboardShortcut(.defaultAction)
-            }
-            .padding(16)
         }
+        .formStyle(.grouped)
+        .onReceive(NotificationCenter.default.publisher(for: .aiUsageSnapshotsDidUpdate)) { notification in
+            guard let snapshots = notification.object as? [UsageSnapshot] else { return }
+            latestSnapshots = snapshots
+        }
+    }
+
+    private var notificationsPanel: some View {
+        let n = draft.resolvedNotifications
+        let remaining = draft.showsRemainingCountdown
+        return Form {
+            Section {
+                Toggle("Enable notifications", isOn: notifEnabledBinding)
+                if n.resolvedEnabled {
+                    Button("Show demo notification") {
+                        UsageNotifier.sendDemoNotification()
+                    }
+                }
+            } footer: {
+                Text("System notifications need the built app bundle (dist/AI Usage.app), not a plain swift run. macOS may ask for permission the first time one fires.")
+            }
+
+            if n.resolvedEnabled {
+                Section {
+                    Toggle(remaining ? "Warn when running low" : "Warn near the limit", isOn: notifThresholdBinding)
+                    if n.resolvedThreshold {
+                        Picker("Threshold", selection: notifThresholdPercentBinding) {
+                            ForEach([80, 85, 90, 95], id: \.self) { used in
+                                Text(remaining ? "\(100 - used)% left" : "\(used)% used").tag(used)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                    Toggle("Alert when a window hits 100%", isOn: notifLimitBinding)
+                } header: {
+                    Text("Usage thresholds")
+                } footer: {
+                    Text("Fires once per cycle when a 5-hour or weekly window crosses the level. Always based on actual usage — the wording follows your \(remaining ? "remaining" : "used") display.")
+                }
+
+                Section("Pace") {
+                    Toggle("Warn if you'll run out before the reset", isOn: notifPaceBinding)
+                        .help("Uses the burn rate since the last reset to project whether the 5-hour window runs out before it resets.")
+                }
+
+                Section("Cycle") {
+                    Toggle("Notify when a window resets (quota refreshed)", isOn: notifResetBinding)
+                }
+
+                Section("Extra quotas") {
+                    Toggle("Notify when an extra quota (e.g. Fable) resumes after 30+ min quiet", isOn: notifExtraBinding)
+                }
+
+                Section("Account") {
+                    Toggle("Notify when a login expires / needs re-import", isOn: notifLoginBinding)
+                }
+
+                Section {
+                    Toggle("Remember notification state across restarts", isOn: notifPersistBinding)
+                } footer: {
+                    Text("Keeps the quiet-period timers and last-seen levels across restarts, so restarting the app alone never re-triggers a notification.")
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func updateNotifications(_ mutate: (inout NotificationSettings) -> Void) {
+        var n = draft.notifications ?? draft.resolvedNotifications
+        mutate(&n)
+        draft.notifications = n
+    }
+
+    private var notifEnabledBinding: Binding<Bool> {
+        Binding(get: { draft.resolvedNotifications.resolvedEnabled }, set: { v in updateNotifications { $0.enabled = v } })
+    }
+    private var notifThresholdBinding: Binding<Bool> {
+        Binding(get: { draft.resolvedNotifications.resolvedThreshold }, set: { v in updateNotifications { $0.threshold = v } })
+    }
+    private var notifThresholdPercentBinding: Binding<Int> {
+        Binding(get: { draft.resolvedNotifications.resolvedThresholdPercentUsed }, set: { v in updateNotifications { $0.thresholdPercentUsed = v } })
+    }
+    private var notifLimitBinding: Binding<Bool> {
+        Binding(get: { draft.resolvedNotifications.resolvedLimitReached }, set: { v in updateNotifications { $0.limitReached = v } })
+    }
+    private var notifPaceBinding: Binding<Bool> {
+        Binding(get: { draft.resolvedNotifications.resolvedPace }, set: { v in updateNotifications { $0.pace = v } })
+    }
+    private var notifResetBinding: Binding<Bool> {
+        Binding(get: { draft.resolvedNotifications.resolvedReset }, set: { v in updateNotifications { $0.reset = v } })
+    }
+    private var notifExtraBinding: Binding<Bool> {
+        Binding(get: { draft.resolvedNotifications.resolvedExtraQuota }, set: { v in updateNotifications { $0.extraQuota = v } })
+    }
+    private var notifLoginBinding: Binding<Bool> {
+        Binding(get: { draft.resolvedNotifications.resolvedLoginExpired }, set: { v in updateNotifications { $0.loginExpired = v } })
+    }
+    private var notifPersistBinding: Binding<Bool> {
+        Binding(get: { draft.resolvedNotifications.resolvedExtraQuotaPersist }, set: { v in updateNotifications { $0.extraQuotaPersist = v } })
     }
 
     private var remainingCountdownBinding: Binding<Bool> {
@@ -268,12 +415,6 @@ struct SettingsView: View {
         )
     }
 
-    private var notifyOnExtraQuotaUsageBinding: Binding<Bool> {
-        Binding(
-            get: { draft.resolvedNotifyOnExtraQuotaUsage },
-            set: { draft.notifyOnExtraQuotaUsage = $0 }
-        )
-    }
 
     private var visualBarModeBinding: Binding<VisualBarMode> {
         Binding(
@@ -1392,7 +1533,7 @@ private struct InfoView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Text("Version 1.4 · 2026-07-11")
+            Text("Version 1.5 · 2026-07-12")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

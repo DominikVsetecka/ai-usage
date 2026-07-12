@@ -13,9 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             let config = try AppConfig.load(from: configURL)
-            if config.resolvedNotifyOnExtraQuotaUsage {
-                ExtraQuotaNotifier.requestAuthorizationIfNeeded()
-            }
+            // Notification authorization is requested by StatusBarController on
+            // init/apply when notifications are enabled.
             statusBarController = StatusBarController(config: config) { [weak self] in
                 self?.openSettings()
             }

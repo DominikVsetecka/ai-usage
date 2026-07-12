@@ -647,11 +647,23 @@ check(mergedEmpty.isEmpty, "merger should return no groups for empty input")
 // on an extra/model-scoped window (e.g. a "Fable" cap).
 let watcherNow = Date(timeIntervalSince1970: 1_800_000_000)
 
-let firstEverIncrease = ExtraQuotaUsageWatcher.evaluate(
-    previousPercent: nil, currentPercent: 3, lastIncreaseAt: nil, now: watcherNow
+// First observation of a window (no previous reading — e.g. right after an app
+// restart, where pre-existing usage is seen for the first time) must NOT notify:
+// it only establishes a baseline. Otherwise every restart fires, because existing
+// usage looks like a fresh 0 -> N jump.
+let firstObservation = ExtraQuotaUsageWatcher.evaluate(
+    previousPercent: nil, currentPercent: 19, lastIncreaseAt: nil, now: watcherNow
 )
-check(firstEverIncrease.shouldNotify, "watcher should notify the first time it ever observes usage on a window")
-check(firstEverIncrease.lastIncreaseAt == watcherNow, "watcher should stamp the increase time")
+check(!firstObservation.shouldNotify, "watcher must not notify on the first observation of a window (baseline only, e.g. after a restart)")
+check(firstObservation.lastIncreaseAt == nil, "a baseline observation must not stamp an increase time")
+
+// After a baseline, an actual observed increase between two readings does notify
+// (usage genuinely resumed) — this is the real signal the feature is meant for.
+let increaseAfterBaseline = ExtraQuotaUsageWatcher.evaluate(
+    previousPercent: 19, currentPercent: 22, lastIncreaseAt: nil, now: watcherNow
+)
+check(increaseAfterBaseline.shouldNotify, "watcher should notify on a real observed increase after the baseline")
+check(increaseAfterBaseline.lastIncreaseAt == watcherNow, "watcher should stamp the increase time")
 
 let continuedBurst = ExtraQuotaUsageWatcher.evaluate(
     previousPercent: 3, currentPercent: 6, lastIncreaseAt: watcherNow, now: watcherNow.addingTimeInterval(5 * 60)
@@ -679,5 +691,66 @@ let stillWithinQuiet = ExtraQuotaUsageWatcher.evaluate(
     previousPercent: 6, currentPercent: 9, lastIncreaseAt: watcherNow, now: watcherNow.addingTimeInterval(29 * 60)
 )
 check(!stillWithinQuiet.shouldNotify, "watcher should stay silent for usage that resumes just under the quiet period")
+
+// NotificationRules: standard-window edge detection (threshold / limit / reset),
+// all on the raw used percent so the remaining-countdown display never affects it.
+let baselineEvents = NotificationRules.evaluateStandardWindow(
+    previousPercent: nil, currentPercent: 95,
+    thresholdEnabled: true, thresholdPercentUsed: 90, limitEnabled: true, resetEnabled: true
+)
+check(baselineEvents.isEmpty, "no notification on the first observation of a window (baseline, e.g. after a restart)")
+
+let crossedThreshold = NotificationRules.evaluateStandardWindow(
+    previousPercent: 88, currentPercent: 91,
+    thresholdEnabled: true, thresholdPercentUsed: 90, limitEnabled: true, resetEnabled: true
+)
+check(crossedThreshold == [.thresholdCrossed], "threshold fires exactly when the used percent crosses up through the level")
+
+let stayedAboveThreshold = NotificationRules.evaluateStandardWindow(
+    previousPercent: 91, currentPercent: 93,
+    thresholdEnabled: true, thresholdPercentUsed: 90, limitEnabled: true, resetEnabled: true
+)
+check(stayedAboveThreshold.isEmpty, "threshold does not re-fire while staying above the level")
+
+let hitLimit = NotificationRules.evaluateStandardWindow(
+    previousPercent: 97, currentPercent: 100,
+    thresholdEnabled: false, thresholdPercentUsed: 90, limitEnabled: true, resetEnabled: true
+)
+check(hitLimit == [.limitReached], "limit fires when the window reaches 100%")
+
+let didReset = NotificationRules.evaluateStandardWindow(
+    previousPercent: 80, currentPercent: 1,
+    thresholdEnabled: true, thresholdPercentUsed: 90, limitEnabled: true, resetEnabled: true
+)
+check(didReset == [.reset], "a large drop is reported as a reset and nothing else")
+
+let readNoise = NotificationRules.evaluateStandardWindow(
+    previousPercent: 33, currentPercent: 32,
+    thresholdEnabled: true, thresholdPercentUsed: 90, limitEnabled: true, resetEnabled: true
+)
+check(readNoise.isEmpty, "a 1-point same-cycle wobble is neither a reset nor a threshold crossing")
+
+let thresholdDisabled = NotificationRules.evaluateStandardWindow(
+    previousPercent: 88, currentPercent: 91,
+    thresholdEnabled: false, thresholdPercentUsed: 90, limitEnabled: false, resetEnabled: false
+)
+check(thresholdDisabled.isEmpty, "disabled notification types never fire")
+
+// NotificationStateStore round-trips the persistent per-window bookkeeping.
+let notifyStateDir = FileManager.default.temporaryDirectory
+    .appendingPathComponent("ai-usage-notify-check-\(UUID().uuidString)", isDirectory: true)
+try FileManager.default.createDirectory(at: notifyStateDir, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: notifyStateDir) }
+let notifyStore = NotificationStateStore(url: notifyStateDir.appendingPathComponent("notify-state.json"))
+check(notifyStore.load().isEmpty, "missing notification state file loads as empty")
+let stamped = Date(timeIntervalSince1970: 1_800_000_000)
+notifyStore.save([
+    "claude1|extra|Fable": NotificationWindowState(lastPercent: 19, lastIncreaseAt: stamped),
+    "claude1|5-hour": NotificationWindowState(lastPercent: 90, paceFired: true)
+])
+let reloaded = notifyStore.load()
+check(reloaded["claude1|extra|Fable"]?.lastPercent == 19, "notification state persists last-seen percent across a reload (restart)")
+check(reloaded["claude1|extra|Fable"]?.lastIncreaseAt == stamped, "notification state persists the quiet-period timestamp across a reload")
+check(reloaded["claude1|5-hour"]?.paceFired == true, "notification state persists the pace-fired flag across a reload")
 
 print("AIUsageChecks passed")

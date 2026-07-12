@@ -22,10 +22,12 @@ final class StatusBarController {
     private var popover: NSPopover?
     private var popoverViewModel: PopoverViewModel?
     let historyStore: UsageHistoryStore
-    /// Last time each extra/model-scoped window (keyed `"sourceID|windowName"`)
-    /// was seen to actively gain usage — feeds `ExtraQuotaUsageWatcher` so a
-    /// notification only fires once per quiet-then-active burst.
-    private var extraQuotaLastIncreaseAt: [String: Date] = [:]
+    private let notifyStateStore = NotificationStateStore(url: StatusBarController.notifyStateURL())
+    /// Persistent per-window notification bookkeeping (baselines, quiet-period
+    /// timers, pace/login flags), keyed `"sourceID|windowName"`. Loaded on
+    /// launch when the user keeps notification state across restarts, so a
+    /// restart alone never re-triggers a notification.
+    private var notifyState: [String: NotificationWindowState] = [:]
 
     var snapshots: [UsageSnapshot] {
         monitor.snapshots
@@ -37,6 +39,12 @@ final class StatusBarController {
         self.onOpenSettings = onOpenSettings
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.historyStore = UsageHistoryStore(directory: Self.historyDirectory())
+        if config.resolvedNotifications.resolvedEnabled {
+            UsageNotifier.requestAuthorizationIfNeeded()
+        }
+        if config.resolvedNotifications.resolvedExtraQuotaPersist {
+            self.notifyState = notifyStateStore.load()
+        }
         configureStatusItem()
         render()
         scheduleRefresh()
@@ -53,6 +61,12 @@ final class StatusBarController {
             .appendingPathComponent(".ai-usage/history")
     }
 
+    private static func notifyStateURL() -> URL {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? "~"
+        return URL(fileURLWithPath: home)
+            .appendingPathComponent(".ai-usage/notify-state.json")
+    }
+
     func stop() {
         timer?.invalidate()
         timer = nil
@@ -63,9 +77,12 @@ final class StatusBarController {
         self.config = config
         self.monitor = UsageMonitor(config: config, oauthService: oauthUsageService)
         popoverViewModel?.config = config
-        if config.resolvedNotifyOnExtraQuotaUsage {
-            ExtraQuotaNotifier.requestAuthorizationIfNeeded()
+        if config.resolvedNotifications.resolvedEnabled {
+            UsageNotifier.requestAuthorizationIfNeeded()
         }
+        // Re-sync persisted notification state with the (possibly changed)
+        // persist preference: load from disk when on, start clean when off.
+        notifyState = config.resolvedNotifications.resolvedExtraQuotaPersist ? notifyStateStore.load() : [:]
         render()
         scheduleRefresh()
         Task {
@@ -147,14 +164,11 @@ final class StatusBarController {
 
     private func refreshNow(force: Bool = false) async {
         popoverViewModel?.isRefreshing = true
-        let previousSnapshots = monitor.snapshots
         _ = await monitor.refresh(force: force) { [weak self] _ in
             self?.render()
         }
-        if config.resolvedNotifyOnExtraQuotaUsage {
-            checkExtraQuotaUsageNotifications(previous: previousSnapshots, current: monitor.snapshots)
-        }
         await historyStore.record(monitor.snapshots)
+        await checkNotifications(current: monitor.snapshots)
         if popover?.isShown == true {
             await popoverViewModel?.loadHistory()
         }
@@ -162,27 +176,137 @@ final class StatusBarController {
         render()
     }
 
-    /// Fires a one-off "quota in use" notification per extra/model-scoped
-    /// window the first time it gains usage after a quiet spell — see
-    /// `ExtraQuotaUsageWatcher` for the gating rule.
-    private func checkExtraQuotaUsageNotifications(previous: [UsageSnapshot], current: [UsageSnapshot]) {
+    /// Evaluates all enabled notification types against the latest snapshots and
+    /// posts any that fire. All gating (baselines, once-per-crossing, quiet
+    /// periods, pace/login hysteresis) lives in the persistent `notifyState`, so
+    /// a restart alone never re-triggers anything. Runs after `historyStore.record`
+    /// so the pace projection sees the current sample.
+    private func checkNotifications(current: [UsageSnapshot]) async {
+        let settings = config.resolvedNotifications
+        guard settings.resolvedEnabled else { return }
         let now = Date()
+        let globalRemaining = config.showsRemainingCountdown
+
+        var historyEntries: [UsageHistoryEntry] = []
+        if settings.resolvedPace {
+            historyEntries = await historyStore.load(days: 1)
+        }
+
         for snapshot in current where snapshot.enabled {
-            let previousWindows = previous.first(where: { $0.sourceID == snapshot.sourceID })?.extraWindows ?? [:]
-            for (windowName, window) in snapshot.extraWindows {
+            let sourceConfig = config.sources.first { $0.id == snapshot.sourceID }
+            let remaining = sourceConfig?.resolvedRemainingCountdown(globalDefault: globalRemaining) ?? globalRemaining
+
+            // Login expired (per source).
+            if settings.resolvedLoginExpired {
+                let key = "\(snapshot.sourceID)|__login"
+                var state = notifyState[key] ?? NotificationWindowState()
+                if snapshot.status == .failed, Self.isAuthError(snapshot.errorMessage) {
+                    if state.loginFailedNotified != true {
+                        UsageNotifier.notifyLoginExpired(sourceLabel: snapshot.label)
+                        state.loginFailedNotified = true
+                    }
+                } else if snapshot.status == .ok {
+                    state.loginFailedNotified = false
+                }
+                notifyState[key] = state
+            }
+
+            // Standard windows: threshold / limit / reset.
+            let standardWindows: [(name: String, window: ProviderUsageWindow?)] = [
+                ("5-hour", snapshot.fiveHour),
+                ("1-week", snapshot.oneWeek)
+            ]
+            for (windowName, maybeWindow) in standardWindows {
+                guard let window = maybeWindow else { continue }
                 let key = "\(snapshot.sourceID)|\(windowName)"
-                let result = ExtraQuotaUsageWatcher.evaluate(
-                    previousPercent: previousWindows[windowName]?.percentUsed,
+                var state = notifyState[key] ?? NotificationWindowState()
+                let events = NotificationRules.evaluateStandardWindow(
+                    previousPercent: state.lastPercent,
                     currentPercent: window.percentUsed,
-                    lastIncreaseAt: extraQuotaLastIncreaseAt[key],
+                    thresholdEnabled: settings.resolvedThreshold,
+                    thresholdPercentUsed: settings.resolvedThresholdPercentUsed,
+                    limitEnabled: settings.resolvedLimitReached,
+                    resetEnabled: settings.resolvedReset
+                )
+                for event in events {
+                    switch event {
+                    case .thresholdCrossed:
+                        UsageNotifier.notifyThreshold(sourceLabel: snapshot.label, windowName: windowName, percentUsed: window.percentUsed, remaining: remaining)
+                    case .limitReached:
+                        UsageNotifier.notifyLimitReached(sourceLabel: snapshot.label, windowName: windowName)
+                    case .reset:
+                        UsageNotifier.notifyReset(sourceLabel: snapshot.label, windowName: windowName)
+                    }
+                }
+                state.lastPercent = window.percentUsed
+                notifyState[key] = state
+            }
+
+            // Pace: 5-hour only, reusing the same state entry.
+            if settings.resolvedPace, let five = snapshot.fiveHour, let resetsAt = five.resetsAt {
+                let key = "\(snapshot.sourceID)|5-hour"
+                var state = notifyState[key] ?? NotificationWindowState()
+                let points = Self.paceHistoryPoints(entries: historyEntries, sourceID: snapshot.sourceID)
+                let projection = UsageEstimator.timeUntilExhausted(
+                    points: points,
+                    currentPct: five.percentUsed,
+                    resetsAt: resetsAt,
                     now: now
                 )
-                extraQuotaLastIncreaseAt[key] = result.lastIncreaseAt
-                if result.shouldNotify {
-                    ExtraQuotaNotifier.notifyUsageStarted(sourceLabel: snapshot.label, windowName: windowName)
+                if let projection {
+                    if state.paceFired != true {
+                        UsageNotifier.notifyPace(sourceLabel: snapshot.label, secondsUntilExhausted: projection)
+                        state.paceFired = true
+                    }
+                } else {
+                    state.paceFired = false
+                }
+                notifyState[key] = state
+            }
+
+            // Extra/model-scoped quotas: resume after a quiet spell.
+            if settings.resolvedExtraQuota {
+                for (windowName, window) in snapshot.extraWindows {
+                    let key = "\(snapshot.sourceID)|extra|\(windowName)"
+                    var state = notifyState[key] ?? NotificationWindowState()
+                    let result = ExtraQuotaUsageWatcher.evaluate(
+                        previousPercent: state.lastPercent,
+                        currentPercent: window.percentUsed,
+                        lastIncreaseAt: state.lastIncreaseAt,
+                        now: now
+                    )
+                    state.lastIncreaseAt = result.lastIncreaseAt
+                    state.lastPercent = window.percentUsed
+                    if result.shouldNotify {
+                        UsageNotifier.notifyExtraQuotaResumed(sourceLabel: snapshot.label, windowName: windowName)
+                    }
+                    notifyState[key] = state
                 }
             }
         }
+
+        if settings.resolvedExtraQuotaPersist {
+            notifyStateStore.save(notifyState)
+        }
+    }
+
+    private static func paceHistoryPoints(entries: [UsageHistoryEntry], sourceID: String) -> [(ts: Date, pct: Int)] {
+        let raw = entries.compactMap { entry -> (ts: Date, pct: Int)? in
+            guard let pct = entry.sources[sourceID]?.fiveHour else { return nil }
+            return (entry.ts, pct)
+        }
+        return HistoryTrimmer.trimToCurrentCycle(raw)
+    }
+
+    private static func isAuthError(_ message: String?) -> Bool {
+        guard let message = message?.lowercased() else { return false }
+        return message.contains("session expired")
+            || message.contains("log in")
+            || message.contains("credentials are missing")
+            || message.contains("no longer valid")
+            || message.contains("authenticat")
+            || message.contains("import a claude")
+            || message.contains("import this profile")
     }
 
     private func render() {

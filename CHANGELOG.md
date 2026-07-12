@@ -2,6 +2,27 @@
 
 All notable changes to AI Usage are documented in this file.
 
+## 1.5 — 2026-07-12
+
+### Added
+
+- Notifications settings section with a full set of opt-in usage alerts, all off by default and configurable per type:
+  - **Usage threshold** — warn once per cycle when a 5-hour or weekly window crosses a chosen level (80/85/90/95%). Always evaluated on real used percent; the wording follows your used-vs-remaining display, so in remaining-countdown mode it reads "only 10% left".
+  - **Limit reached** — alert when a window hits 100%.
+  - **Pace** — warn when the burn rate projects running out of the 5-hour window before it resets (reuses the existing pace estimator).
+  - **Cycle reset** — notify when a window resets (quota refreshed).
+  - **Extra quota resumed** — the existing "Fable started being used again after 30+ min quiet" notification, now alongside the rest.
+  - **Login expired** — notify when a source can't be read because its login needs a re-import (as opposed to a transient rate-limit).
+- "Remember notification state across restarts" — persists the quiet-period timers and last-seen levels to `~/.ai-usage/notify-state.json`, so restarting the app never re-triggers a notification on its own.
+
+### Changed
+
+- Settings were reorganized from three crowded tabs into a macOS-style left sidebar with focused panels: General, Menu Bar, Popover, Notifications, Connections, History, About.
+
+### Fixed
+
+- The extra-quota (Fable) notification no longer fires on every app restart. Pre-existing usage seen for the first time now only establishes a baseline; a notification requires an actual observed increase, gated by the 30-minute quiet period (which now survives restarts when state-remembering is on).
+
 ## 1.4 — 2026-07-11
 
 ### Changed

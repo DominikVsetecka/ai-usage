@@ -20,6 +20,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var roundedHistorySteps: Bool?
     public var connectedHistorySteps: Bool?
     public var notifyOnExtraQuotaUsage: Bool?
+    public var notifications: NotificationSettings?
     public var visualBlockGap: CGFloat?
     public var sources: [SourceConfig]
 
@@ -43,6 +44,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         roundedHistorySteps: Bool? = nil,
         connectedHistorySteps: Bool? = nil,
         notifyOnExtraQuotaUsage: Bool? = nil,
+        notifications: NotificationSettings? = nil,
         visualBlockGap: CGFloat? = nil,
         sources: [SourceConfig]
     ) {
@@ -65,6 +67,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.roundedHistorySteps = roundedHistorySteps
         self.connectedHistorySteps = connectedHistorySteps
         self.notifyOnExtraQuotaUsage = notifyOnExtraQuotaUsage
+        self.notifications = notifications
         self.visualBlockGap = visualBlockGap
         self.sources = sources
     }
@@ -118,6 +121,18 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public var resolvedNotifyOnExtraQuotaUsage: Bool {
         notifyOnExtraQuotaUsage ?? false
+    }
+
+    /// Resolved notification settings. When the new `notifications` block is
+    /// absent (older configs), fall back to the legacy single `notifyOnExtra
+    /// QuotaUsage` toggle so an existing Fable-notification preference keeps
+    /// working, with every other notification type off until explicitly enabled.
+    public var resolvedNotifications: NotificationSettings {
+        if let notifications { return notifications }
+        if notifyOnExtraQuotaUsage == true {
+            return NotificationSettings(enabled: true, extraQuota: true)
+        }
+        return NotificationSettings()
     }
 
     public static let visualBarHeightRange: ClosedRange<CGFloat> = 8...56
@@ -237,6 +252,71 @@ public struct AppConfig: Codable, Equatable, Sendable {
         default: sourceID
         }
     }
+}
+
+/// Which usage notifications are enabled and how they're tuned. All fields are
+/// optional so older configs decode unchanged; the `resolved*` accessors apply
+/// defaults. Everything is opt-in (default off) except the safe cross-restart
+/// memory, which defaults on.
+public struct NotificationSettings: Codable, Equatable, Sendable {
+    /// Master switch — when off, no notifications fire regardless of the rest.
+    public var enabled: Bool?
+    /// Warn when a standard window crosses `thresholdPercentUsed`.
+    public var threshold: Bool?
+    /// The used-% at which the threshold warning fires (stored as "used", the
+    /// display may show it as "remaining" — that's a presentation concern only).
+    public var thresholdPercentUsed: Int?
+    /// Alert when a standard window reaches 100%.
+    public var limitReached: Bool?
+    /// Warn when the burn rate projects running out before the reset.
+    public var pace: Bool?
+    /// Notify when a window resets (quota refreshed to ~0).
+    public var reset: Bool?
+    /// Notify when an extra/model-scoped quota (e.g. "Fable") resumes after a
+    /// 30-minute quiet spell.
+    public var extraQuota: Bool?
+    /// Persist notification state (quiet-period timers, last-seen levels) across
+    /// app restarts, so a restart alone never re-triggers a notification.
+    public var extraQuotaPersist: Bool?
+    /// Notify when a source can't be read because its login expired / needs a
+    /// re-import (as opposed to a transient rate-limit or network blip).
+    public var loginExpired: Bool?
+
+    public init(
+        enabled: Bool? = nil,
+        threshold: Bool? = nil,
+        thresholdPercentUsed: Int? = nil,
+        limitReached: Bool? = nil,
+        pace: Bool? = nil,
+        reset: Bool? = nil,
+        extraQuota: Bool? = nil,
+        extraQuotaPersist: Bool? = nil,
+        loginExpired: Bool? = nil
+    ) {
+        self.enabled = enabled
+        self.threshold = threshold
+        self.thresholdPercentUsed = thresholdPercentUsed
+        self.limitReached = limitReached
+        self.pace = pace
+        self.reset = reset
+        self.extraQuota = extraQuota
+        self.extraQuotaPersist = extraQuotaPersist
+        self.loginExpired = loginExpired
+    }
+
+    public static let thresholdPercentRange: ClosedRange<Int> = 50...99
+
+    public var resolvedEnabled: Bool { enabled ?? false }
+    public var resolvedThreshold: Bool { threshold ?? false }
+    public var resolvedThresholdPercentUsed: Int {
+        min(Self.thresholdPercentRange.upperBound, max(Self.thresholdPercentRange.lowerBound, thresholdPercentUsed ?? 90))
+    }
+    public var resolvedLimitReached: Bool { limitReached ?? false }
+    public var resolvedPace: Bool { pace ?? false }
+    public var resolvedReset: Bool { reset ?? false }
+    public var resolvedExtraQuota: Bool { extraQuota ?? false }
+    public var resolvedExtraQuotaPersist: Bool { extraQuotaPersist ?? true }
+    public var resolvedLoginExpired: Bool { loginExpired ?? false }
 }
 
 public struct SourceConfig: Codable, Equatable, Sendable {
