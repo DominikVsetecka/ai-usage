@@ -23,7 +23,8 @@ All notable changes to AI Usage are documented in this file.
 
 ### Changed
 
-- Reconsidered the above fix after feedback that a hidden, decoupled cache behind the visible refresh interval was confusing — "1 minute" in Settings should mean a real network check every 1 minute, not a display tick with a longer invisible cache underneath. The Claude usage cache is now kept exactly equal to the configured refresh interval (no separate/longer default), and the minimum selectable refresh interval was raised from 30 seconds to 1 minute to reduce request rate against the account-level rate limit. A legacy config with a shorter interval automatically migrates up to the new 1-minute floor on load. A manual refresh (or Save & Refresh) still bypasses the cache immediately, subject only to the existing 10-second floor.
+- Reconsidered the above fix after feedback that a hidden, decoupled cache behind the visible refresh interval was confusing — "1 minute" in Settings should mean a real network check every 1 minute, not a display tick with a longer invisible cache underneath. The Claude usage cache is now kept exactly equal to the configured refresh interval (no separate/longer default), and the minimum selectable refresh interval was raised from 30 seconds to 1 minute to reduce request rate against the account-level rate limit. A legacy config with a shorter interval automatically migrates up to the new floor on load. A manual refresh (or Save & Refresh) still bypasses the cache immediately, subject only to the existing 10-second floor.
+- After confirming 2 minutes ran rate-limit-free, the "1 minute" option was replaced with "90 seconds" to narrow down the actual safe threshold between the two; the minimum refresh interval (and cache TTL, per the above) is now 90 seconds.
 
 ### Changed
 

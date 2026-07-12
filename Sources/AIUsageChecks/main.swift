@@ -52,13 +52,14 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) -> Bool {
 }
 
 let config = AppConfig.default
-check(config.refreshIntervalSeconds == 60, "default refresh should be 60s (1 minute is the new minimum)")
+check(config.refreshIntervalSeconds == 90, "default refresh should be 90s (confirmed 2min is rate-limit-safe; 90s narrows down the threshold)")
 // Regression guard for the refresh-interval floor: after a real rate-limit
-// episode, the minimum was raised from 30s to 60s (ORB-0134) to reduce request
-// rate against an account-level limit, by explicit user choice to keep the
-// Claude OAuth cache TTL exactly equal to the configured interval (no
-// separate/longer decoupled cache) rather than a bigger hidden cache window.
-check(AppConfig(refreshIntervalSeconds: 10, sources: []).refreshIntervalSeconds == 60, "refresh interval must floor at 60s even if a caller asks for less")
+// episode, the minimum was raised from 30s to 60s and then to 90s (ORB-0134)
+// to reduce request rate against an account-level limit, by explicit user
+// choice to keep the Claude OAuth cache TTL exactly equal to the configured
+// interval (no separate/longer decoupled cache) rather than a bigger hidden
+// cache window.
+check(AppConfig(refreshIntervalSeconds: 10, sources: []).refreshIntervalSeconds == 90, "refresh interval must floor at 90s even if a caller asks for less")
 check(AppConfig(refreshIntervalSeconds: 120, sources: []).refreshIntervalSeconds == 120, "refresh interval above the floor is left untouched")
 check(config.showsRemainingCountdown == false, "remaining countdown should default off")
 check(config.resolvedVisualHistoryStyle == .bars, "history style should default to bars")
@@ -85,8 +86,8 @@ check(reloadedConfig.showsRemainingCountdown, "countdown setting should persist"
 check(reloadedConfig.resolvedVisualHistoryStyle == .line, "history style should persist")
 try? FileManager.default.removeItem(at: temporaryConfigURL)
 
-// A config saved before the 60s floor existed (e.g. an old 15s/30s value) is
-// decoded via Codable's synthesized init, which bypasses the custom
+// A config saved before the 90s floor existed (e.g. an old 15s/30s/60s value)
+// is decoded via Codable's synthesized init, which bypasses the custom
 // initializer's clamp entirely — `normalized()` must catch this too, not just
 // fresh construction, otherwise a legacy on-disk config would keep running at
 // the old, faster (rate-limit-prone) interval forever.
@@ -96,7 +97,7 @@ var legacyJSON = try JSONSerialization.jsonObject(with: try JSONEncoder().encode
 legacyJSON["refreshIntervalSeconds"] = 15
 try JSONSerialization.data(withJSONObject: legacyJSON).write(to: legacyConfigURL)
 let migratedConfig = try AppConfig.load(from: legacyConfigURL)
-check(migratedConfig.refreshIntervalSeconds == 60, "a legacy on-disk config below the 60s floor migrates up on load")
+check(migratedConfig.refreshIntervalSeconds == 90, "a legacy on-disk config below the 90s floor migrates up on load")
 try? FileManager.default.removeItem(at: legacyConfigURL)
 
 let snapshots = [

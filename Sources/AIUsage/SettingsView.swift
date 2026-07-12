@@ -111,7 +111,7 @@ struct SettingsView: View {
         Form {
             Section {
                 Picker("Refresh interval", selection: $draft.refreshIntervalSeconds) {
-                    Text("1 minute").tag(TimeInterval(60))
+                    Text("90 seconds").tag(TimeInterval(90))
                     Text("2 minutes").tag(TimeInterval(120))
                     Text("5 minutes").tag(TimeInterval(300))
                 }

@@ -48,7 +48,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         visualBlockGap: CGFloat? = nil,
         sources: [SourceConfig]
     ) {
-        self.refreshIntervalSeconds = max(60, refreshIntervalSeconds)
+        self.refreshIntervalSeconds = max(90, refreshIntervalSeconds)
         self.remainingCountdownEnabled = remainingCountdownEnabled
         self.menuBarFontSize = menuBarFontSize
         self.menuBarFontWeight = menuBarFontWeight
@@ -155,7 +155,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     }
 
     public static let `default` = AppConfig(
-        refreshIntervalSeconds: 60,
+        refreshIntervalSeconds: 90,
         remainingCountdownEnabled: false,
         sources: [
             SourceConfig(
@@ -237,9 +237,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
     private func normalized() -> AppConfig {
         var copy = self
         // Codable's synthesized decode bypasses the custom initializer (and its
-        // 60s floor), so a config saved before this floor existed (e.g. an old
-        // 15s or 30s value) must be caught here too, not just on fresh construction.
-        copy.refreshIntervalSeconds = max(60, copy.refreshIntervalSeconds)
+        // 90s floor), so a config saved before this floor existed (e.g. an old
+        // 15s/30s/60s value) must be caught here too, not just on fresh construction.
+        copy.refreshIntervalSeconds = max(90, copy.refreshIntervalSeconds)
         for index in copy.sources.indices {
             if copy.sources[index].label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 copy.sources[index].label = Self.defaultLabel(for: copy.sources[index].id)
