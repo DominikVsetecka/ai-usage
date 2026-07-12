@@ -15,7 +15,7 @@ final class StatusBarController {
     /// usage cache and rate-limit backoff survive "Save & Refresh" instead of
     /// being reset by a fresh `UsageMonitor`. Its cache TTL is updated to track
     /// the current refresh interval whenever config is applied.
-    private let oauthUsageService = ClaudeOAuthUsageService()
+    private let oauthUsageService = ClaudeOAuthUsageService(logURL: StatusBarController.fetchLogURL())
     private(set) var config: AppConfig
     private let onOpenSettings: () -> Void
     private var timer: Timer?
@@ -51,7 +51,7 @@ final class StatusBarController {
 
         Task {
             await oauthUsageService.updateCacheTTL(config.refreshIntervalSeconds * 0.8)
-            await refreshNow(force: true)
+            await refreshNow(force: true, trigger: "startup")
         }
     }
 
@@ -65,6 +65,12 @@ final class StatusBarController {
         let home = ProcessInfo.processInfo.environment["HOME"] ?? "~"
         return URL(fileURLWithPath: home)
             .appendingPathComponent(".ai-usage/notify-state.json")
+    }
+
+    private static func fetchLogURL() -> URL {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? "~"
+        return URL(fileURLWithPath: home)
+            .appendingPathComponent(".ai-usage/fetch-log.txt")
     }
 
     func stop() {
@@ -87,7 +93,7 @@ final class StatusBarController {
         scheduleRefresh()
         Task {
             await oauthUsageService.updateCacheTTL(config.refreshIntervalSeconds * 0.8)
-            await refreshNow(force: true)
+            await refreshNow(force: true, trigger: "settings-apply")
         }
     }
 
@@ -106,7 +112,7 @@ final class StatusBarController {
         vm.snapshots = monitor.snapshots
         vm.historyStore = historyStore
         vm.onRefresh = { [weak self] in
-            Task { await self?.refreshNow(force: true) }
+            Task { await self?.refreshNow(force: true, trigger: "manual-refresh") }
         }
         vm.onOpenSettings = { [weak self] in
             self?.popover?.performClose(nil)
@@ -156,13 +162,14 @@ final class StatusBarController {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: monitor.refreshIntervalSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                await self?.refreshNow()
+                await self?.refreshNow(trigger: "timer")
             }
         }
         timer?.tolerance = min(5, monitor.refreshIntervalSeconds * 0.1)
     }
 
-    private func refreshNow(force: Bool = false) async {
+    private func refreshNow(force: Bool = false, trigger: String = "unknown") async {
+        await oauthUsageService.note("refresh cycle  trigger=\(trigger) force=\(force) interval=\(Int(monitor.refreshIntervalSeconds))s")
         popoverViewModel?.isRefreshing = true
         _ = await monitor.refresh(force: force) { [weak self] _ in
             self?.render()

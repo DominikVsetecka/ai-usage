@@ -61,26 +61,70 @@ public actor ClaudeOAuthUsageService {
     /// tripping it and re-surfacing the error). Reset on any successful fetch.
     private var rateLimitStreak: [UUID: Int] = [:]
 
+    // Diagnostic fetch log: a human-readable, last-100-line ring buffer written
+    // to `logURL` (when set). Records every usage fetch decision — cache hit,
+    // real network GET with the interval since the last one, 429 + backoff,
+    // block-while-locked — plus free-form `note(_:)` lines (refresh triggers).
+    private let logURL: URL?
+    private var logLines: [String] = []
+    private var logLoaded = false
+    private static let logLimit = 100
+
     public init(
         store: any ClaudeCredentialStoring = KeychainClaudeCredentialStore(),
         transport: any HTTPTransporting = URLSessionHTTPTransport(),
         cacheTTL: TimeInterval = 20,
-        minForceFetchInterval: TimeInterval = 10
+        minForceFetchInterval: TimeInterval = 10,
+        logURL: URL? = nil
     ) {
         self.store = store
         self.transport = transport
         self.cacheTTL = cacheTTL
         self.minForceFetchInterval = minForceFetchInterval
+        self.logURL = logURL
+    }
+
+    /// Append a free-form diagnostic line (e.g. the code trigger of a refresh
+    /// cycle) to the same fetch log, so triggers and fetch outcomes interleave
+    /// in one timeline.
+    public func note(_ line: String) {
+        logEvent(line)
+    }
+
+    private func logEvent(_ line: String) {
+        guard let logURL else { return }
+        if !logLoaded {
+            if let existing = try? String(contentsOf: logURL, encoding: .utf8) {
+                logLines = existing.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+            }
+            logLoaded = true
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        logLines.append("\(formatter.string(from: Date()))  \(line)")
+        if logLines.count > Self.logLimit {
+            logLines.removeFirst(logLines.count - Self.logLimit)
+        }
+        try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? (logLines.joined(separator: "\n") + "\n").data(using: .utf8)?.write(to: logURL, options: .atomic)
+    }
+
+    private static func shortID(_ id: UUID) -> String {
+        String(id.uuidString.prefix(8))
     }
 
     public func fetch(profileID: UUID, force: Bool = false) async throws -> ClaudeUsageResult {
         let now = Date()
+        let mode = force ? "forced  " : "periodic"
+        let tag = Self.shortID(profileID)
+        let sinceLast = cache[profileID].map { Int(now.timeIntervalSince($0.storedAt).rounded()) }
         // A forced (manual) refresh bypasses most of the cache TTL, but still
         // honours `minForceFetchInterval` as a hard floor — so rapid button
         // presses are served from cache rather than each firing a request.
         if let cached = cache[profileID] {
             let threshold = force ? minForceFetchInterval : cacheTTL
             if now.timeIntervalSince(cached.storedAt) < threshold {
+                logEvent("usage \(tag) \(mode) -> cache-hit (age \(sinceLast ?? -1)s < ttl \(Int(threshold))s)")
                 return cached.result
             }
         }
@@ -89,21 +133,27 @@ public actor ClaudeOAuthUsageService {
             // frozen cached value as a fresh success — the monitor restores the
             // last-known numbers per field and the status bar greys them, so the
             // rate-limit is actually visible instead of looking up to date.
+            logEvent("usage \(tag) \(mode) -> BLOCKED (rate-limited, \(Int(retryDate.timeIntervalSince(now).rounded()))s left)")
             throw ClaudeOAuthUsageError.rateLimited(retryDate)
         }
 
         guard var credentials = try store.load(profileID: profileID) else {
+            logEvent("usage \(tag) \(mode) -> ERROR: no credentials")
             throw ClaudeOAuthUsageError.authenticationRequired
         }
         if credentials.needsRefresh(), credentials.refreshToken != nil {
+            logEvent("usage \(tag) \(mode) -> token refresh (near expiry)")
             credentials = try await refresh(credentials, profileID: profileID)
         }
 
+        logEvent("usage \(tag) \(mode) -> NETWORK GET (since last real fetch: \(sinceLast.map { "\($0)s" } ?? "n/a"))")
         var response = try await usageResponse(accessToken: credentials.accessToken)
         if response.statusCode == 401 || response.statusCode == 403 {
             guard credentials.refreshToken != nil else {
+                logEvent("usage \(tag) \(mode) -> \(response.statusCode), no refresh token")
                 throw ClaudeOAuthUsageError.authenticationRequired
             }
+            logEvent("usage \(tag) \(mode) -> \(response.statusCode), token refresh + retry")
             credentials = try await refresh(credentials, profileID: profileID)
             response = try await usageResponse(accessToken: credentials.accessToken)
         }
@@ -117,11 +167,14 @@ public actor ClaudeOAuthUsageService {
             rateLimitStreak[profileID] = attempts
             let exponential = min(900, 60 * pow(2, Double(attempts - 1)))
             let serverDelay = response.headers["retry-after"].flatMap(Double.init) ?? 0
-            let date = now.addingTimeInterval(max(exponential, serverDelay))
+            let backoff = max(exponential, serverDelay)
+            let date = now.addingTimeInterval(backoff)
             retryAfter[profileID] = date
+            logEvent("usage \(tag) \(mode) -> 429 RATE-LIMITED, backoff \(Int(backoff))s (streak \(attempts), server retry-after \(serverDelay > 0 ? "\(Int(serverDelay))s" : "none"))")
             throw ClaudeOAuthUsageError.rateLimited(date)
         }
         guard response.statusCode == 200 else {
+            logEvent("usage \(tag) \(mode) -> HTTP \(response.statusCode)")
             if response.statusCode == 401 || response.statusCode == 403 {
                 throw ClaudeOAuthUsageError.authenticationRequired
             }
@@ -132,6 +185,7 @@ public actor ClaudeOAuthUsageService {
         cache[profileID] = CacheEntry(result: result, storedAt: now)
         retryAfter[profileID] = nil
         rateLimitStreak[profileID] = nil
+        logEvent("usage \(tag) \(mode) -> 200 OK")
         return result
     }
 

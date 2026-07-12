@@ -14,6 +14,7 @@ All notable changes to AI Usage are documented in this file.
   - **Extra quota resumed** — the existing "Fable started being used again after 30+ min quiet" notification, now alongside the rest.
   - **Login expired** — notify when a source can't be read because its login needs a re-import (as opposed to a transient rate-limit).
 - "Remember notification state across restarts" — persists the quiet-period timers and last-seen levels to `~/.ai-usage/notify-state.json`, so restarting the app never re-triggers a notification on its own.
+- Diagnostic fetch log at `~/.ai-usage/fetch-log.txt` (last 100 lines): every Claude usage fetch with a timestamp, the refresh trigger (timer/startup/manual/settings-apply), whether it was a cache hit or a real network call, the interval since the last real fetch, and any 429 with its backoff — for troubleshooting refresh timing and rate-limits.
 
 ### Changed
 
