@@ -211,7 +211,18 @@ private struct ProviderDetailSection: View {
     }
 
     private var oneWeekBurn: [BurnPoint] {
-        burnPoints(
+        if source?.mode == .codexRPC, snapshot.fiveHour == nil, snapshot.oneWeek != nil {
+            // Compatibility for the temporary Codex weekly-only rollout: older
+            // app builds stored that single weekly window in the fiveHour
+            // history slot. Use it only when Codex currently reports no real
+            // 5-hour window, so the 1-week popover history does not appear
+            // empty right after updating.
+            return burnPoints(
+                duration: 7 * 24 * 3600,
+                resetsAt: snapshot.oneWeek?.resetsAt
+            ) { $0.oneWeek ?? $0.fiveHour }
+        }
+        return burnPoints(
             duration: 7 * 24 * 3600,
             resetsAt: snapshot.oneWeek?.resetsAt,
             value: \.oneWeek

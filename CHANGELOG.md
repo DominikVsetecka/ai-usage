@@ -8,6 +8,7 @@ All notable changes to AI Usage are documented in this file.
 
 - Codex/GPT usage now handles the temporary weekly-only rate-limit shape where no 5-hour limit is reported. The menu bar falls back to the available weekly quota, and the popover hides the stale 5-hour row instead of showing it with a multi-day reset countdown.
 - Structured Codex RPC refreshes now clear missing standard windows authoritatively, so an old in-memory 5-hour value is not restored after Codex stops reporting that limit.
+- The GPT 1-week popover history now reuses older samples that were written into the 5-hour history slot by affected builds, but only while Codex currently reports no real 5-hour window.
 
 ## 1.5 — 2026-07-12
 
