@@ -147,6 +147,11 @@ public struct UsageSnapshot: Equatable, Sendable {
     /// standard 5-hour/weekly pair — e.g. a model-scoped weekly limit like
     /// "Fable" — keyed by their display name. Empty when none are reported.
     public var extraWindows: [String: ProviderUsageWindow]
+    /// When true, missing standard windows are a real part of the latest
+    /// provider response rather than a transient parse gap. Structured probes
+    /// such as Codex RPC use this so a removed/temporarily absent 5-hour limit
+    /// clears the old row instead of being restored from stale history.
+    public var standardWindowsAuthoritative: Bool
 
     public init(
         sourceID: String,
@@ -160,7 +165,8 @@ public struct UsageSnapshot: Equatable, Sendable {
         errorMessage: String?,
         fiveHour: ProviderUsageWindow? = nil,
         oneWeek: ProviderUsageWindow? = nil,
-        extraWindows: [String: ProviderUsageWindow] = [:]
+        extraWindows: [String: ProviderUsageWindow] = [:],
+        standardWindowsAuthoritative: Bool = false
     ) {
         self.sourceID = sourceID
         self.label = label
@@ -174,6 +180,7 @@ public struct UsageSnapshot: Equatable, Sendable {
         self.fiveHour = fiveHour
         self.oneWeek = oneWeek
         self.extraWindows = extraWindows
+        self.standardWindowsAuthoritative = standardWindowsAuthoritative
     }
 
     public static func idle(from config: SourceConfig) -> UsageSnapshot {

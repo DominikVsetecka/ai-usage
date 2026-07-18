@@ -219,6 +219,48 @@ check(partialSuccessSnapshot?.status == .ok, "partial-success refresh should kee
 check(partialSuccessSnapshot?.fiveHour?.percentUsed == 25, "partial-success refresh should use the freshly parsed fiveHour")
 check(partialSuccessSnapshot?.oneWeek?.percentUsed == 61, "partial-success refresh should preserve the last-known-good oneWeek instead of blanking it")
 
+// Structured probes can mark their standard-window set authoritative. That is
+// required for Codex's weekly-only test shape: a previously seen 5-hour window
+// must disappear instead of being restored as stale history.
+actor AuthoritativeWeeklyOnlyProbe: UsageProbing {
+    let sourceID = "codex"
+    let label = "GPT"
+    let enabled = true
+    private var callCount = 0
+
+    func readUsage() async -> UsageSnapshot {
+        callCount += 1
+        if callCount == 1 {
+            return UsageSnapshot(
+                sourceID: sourceID, label: label, enabled: true,
+                percentUsed: 20, status: .ok, updatedAt: nil, errorMessage: nil,
+                fiveHour: ProviderUsageWindow(percentUsed: 20, resetDescription: "Resets in 3h"),
+                oneWeek: ProviderUsageWindow(percentUsed: 40, resetDescription: "Resets in 6d"),
+                standardWindowsAuthoritative: true
+            )
+        }
+        return UsageSnapshot(
+            sourceID: sourceID, label: label, enabled: true,
+            percentUsed: 45, status: .ok, updatedAt: nil, errorMessage: nil,
+            fiveHour: nil,
+            oneWeek: ProviderUsageWindow(percentUsed: 45, resetDescription: "Resets in 6d"),
+            standardWindowsAuthoritative: true
+        )
+    }
+}
+let authoritativeMonitorSource = SourceConfig(
+    id: "codex", label: "GPT", enabled: true, mode: .fixture, command: nil
+)
+let authoritativeMonitor = UsageMonitor(
+    config: AppConfig(refreshIntervalSeconds: 30, sources: [authoritativeMonitorSource]),
+    probes: [AuthoritativeWeeklyOnlyProbe()]
+)
+_ = await authoritativeMonitor.refresh()
+let authoritativeSnapshots = await authoritativeMonitor.refresh()
+let authoritativeSnapshot = authoritativeSnapshots.first { $0.sourceID == "codex" }
+check(authoritativeSnapshot?.fiveHour == nil, "authoritative weekly-only refresh should clear the stale five-hour window")
+check(authoritativeSnapshot?.oneWeek?.percentUsed == 45, "authoritative weekly-only refresh should keep the reported weekly window")
+
 let redrawnClaudeOutput = """
 Curret session
 0% used

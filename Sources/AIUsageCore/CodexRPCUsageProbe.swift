@@ -48,7 +48,8 @@ public struct CodexRPCUsageProbe: UsageProbing {
                 resetDescription: selected.resetDescription,
                 errorMessage: nil,
                 fiveHour: result.fiveHour,
-                oneWeek: result.oneWeek
+                oneWeek: result.oneWeek,
+                standardWindowsAuthoritative: true
             )
         } catch {
             return failure(error.localizedDescription)

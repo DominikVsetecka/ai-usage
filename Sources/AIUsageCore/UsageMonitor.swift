@@ -51,20 +51,20 @@ public final class UsageMonitor {
         return snapshots
     }
 
-    /// Fills in any missing window from the last-known-good snapshot,
-    /// regardless of the new snapshot's overall status. A probe can report
-    /// `.ok` while still failing to parse a single window this cycle (e.g. a
-    /// Claude CLI `/usage` TUI redraw glitch that only garbles one section) —
-    /// without this, that one field silently goes blank in the popover and
-    /// stays that way until the next fully-clean parse, which in practice can
-    /// mean "only a restart fixes it" if the same glitch keeps recurring.
-    /// Preserving per field, not just on hard failure, closes that gap.
+    /// Fills in missing windows from the last-known-good snapshot unless the
+    /// probe says its standard-window set is authoritative. Text/TUI probes can
+    /// report `.ok` while failing to parse one section this cycle (e.g. a
+    /// Claude CLI `/usage` redraw glitch), so they keep the old per-field
+    /// preservation. Structured probes can instead clear missing windows when
+    /// a provider really stops reporting them.
     private static func merged(new: UsageSnapshot, previous: UsageSnapshot) -> UsageSnapshot {
         var merged = new
         if merged.percentUsed == nil { merged.percentUsed = previous.percentUsed }
         if merged.resetDescription == nil { merged.resetDescription = previous.resetDescription }
-        if merged.fiveHour == nil { merged.fiveHour = previous.fiveHour }
-        if merged.oneWeek == nil { merged.oneWeek = previous.oneWeek }
+        if !merged.standardWindowsAuthoritative {
+            if merged.fiveHour == nil { merged.fiveHour = previous.fiveHour }
+            if merged.oneWeek == nil { merged.oneWeek = previous.oneWeek }
+        }
         if merged.extraWindows.isEmpty { merged.extraWindows = previous.extraWindows }
         return merged
     }
