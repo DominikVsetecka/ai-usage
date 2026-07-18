@@ -230,18 +230,48 @@ let redrawnClaudeResult = try ClaudeCLIUsageProbe.parse(redrawnClaudeOutput)
 check(redrawnClaudeResult.session?.percentUsed == 0, "Claude parser should tolerate TUI-redrawn session labels")
 check(redrawnClaudeResult.weekly?.percentUsed == 0, "Claude parser should preserve weekly ordering after TUI redraw")
 
+let codexFixtureNow = Date()
 let rpcResponse: [String: Any] = [
     "result": [
         "rateLimits": [
             "planType": "plus",
-            "primary": ["usedPercent": 25.0, "resetsAt": 1_900_000_000],
-            "secondary": ["usedPercent": 40.0, "resetsAt": 1_900_100_000]
+            "primary": ["usedPercent": 25.0, "resetsAt": codexFixtureNow.addingTimeInterval(3 * 3600).timeIntervalSince1970],
+            "secondary": ["usedPercent": 40.0, "resetsAt": codexFixtureNow.addingTimeInterval(6 * 24 * 3600).timeIntervalSince1970]
         ]
     ]
 ]
 let codexResult = try CodexRPCClient.parseRateLimitsResponse(rpcResponse)
 check(codexResult.primary?.percentUsed == 25, "Codex RPC parser should read primary percent")
 check(codexResult.secondary?.percentUsed == 40, "Codex RPC parser should read secondary percent")
+check(codexResult.fiveHour?.percentUsed == 25, "Codex RPC parser should classify legacy primary as five-hour usage")
+check(codexResult.oneWeek?.percentUsed == 40, "Codex RPC parser should classify legacy secondary as weekly usage")
+
+let codexWeeklyOnlyPrimaryResponse: [String: Any] = [
+    "result": [
+        "rateLimits": [
+            "planType": "plus",
+            "primary": ["usedPercent": 64.0, "resetsAt": codexFixtureNow.addingTimeInterval(5 * 24 * 3600).timeIntervalSince1970]
+        ]
+    ]
+]
+let codexWeeklyOnlyPrimary = try CodexRPCClient.parseRateLimitsResponse(codexWeeklyOnlyPrimaryResponse)
+check(codexWeeklyOnlyPrimary.primary?.percentUsed == 64, "Codex RPC parser should still expose raw primary when only one window is reported")
+check(codexWeeklyOnlyPrimary.fiveHour == nil, "Codex weekly-only primary should not be mislabeled as a five-hour window")
+check(codexWeeklyOnlyPrimary.oneWeek?.percentUsed == 64, "Codex weekly-only primary should be classified as the weekly window")
+check(codexWeeklyOnlyPrimary.selectedWindow(for: .session)?.percentUsed == 64, "Codex session menu selection should fall back to the only available weekly window")
+
+let codexWeeklyOnlySecondaryResponse: [String: Any] = [
+    "result": [
+        "rateLimits": [
+            "planType": "plus",
+            "secondary": ["usedPercent": 71.0, "resetsAt": codexFixtureNow.addingTimeInterval(4 * 24 * 3600).timeIntervalSince1970]
+        ]
+    ]
+]
+let codexWeeklyOnlySecondary = try CodexRPCClient.parseRateLimitsResponse(codexWeeklyOnlySecondaryResponse)
+check(codexWeeklyOnlySecondary.secondary?.percentUsed == 71, "Codex RPC parser should read a secondary-only percent")
+check(codexWeeklyOnlySecondary.fiveHour == nil, "Codex weekly-only secondary should not synthesize a five-hour window")
+check(codexWeeklyOnlySecondary.oneWeek?.percentUsed == 71, "Codex secondary-only response should be classified as weekly usage")
 
 let credentialFixture = Data(#"{"claudeAiOauth":{"accessToken":"fixture-access","refreshToken":"fixture-refresh","expiresAt":1900000000000,"subscriptionType":"pro","scopes":["user:profile"]}}"#.utf8)
 let parsedCredentials = try ClaudeCodeCredentialImporter.parseCredentials(credentialFixture)

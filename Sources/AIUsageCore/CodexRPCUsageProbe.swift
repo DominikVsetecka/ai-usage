@@ -33,7 +33,7 @@ public struct CodexRPCUsageProbe: UsageProbing {
             let result = try await Task.detached(priority: .utility) {
                 try CodexRPCClient.fetch(command: command)
             }.value
-            let selected = quota == .weekly ? result.secondary : result.primary
+            let selected = result.selectedWindow(for: quota)
             guard let selected else {
                 return failure("Codex did not report \(quota.displayName.lowercased()) usage")
             }
@@ -47,8 +47,8 @@ public struct CodexRPCUsageProbe: UsageProbing {
                 updatedAt: Date(),
                 resetDescription: selected.resetDescription,
                 errorMessage: nil,
-                fiveHour: result.primary,
-                oneWeek: result.secondary
+                fiveHour: result.fiveHour,
+                oneWeek: result.oneWeek
             )
         } catch {
             return failure(error.localizedDescription)
@@ -63,7 +63,36 @@ public struct CodexRPCUsageProbe: UsageProbing {
 public struct CodexRateLimitResult: Equatable, Sendable {
     public let primary: ProviderUsageWindow?
     public let secondary: ProviderUsageWindow?
+    public let fiveHour: ProviderUsageWindow?
+    public let oneWeek: ProviderUsageWindow?
     public let planType: String?
+
+    public init(
+        primary: ProviderUsageWindow?,
+        secondary: ProviderUsageWindow?,
+        fiveHour: ProviderUsageWindow? = nil,
+        oneWeek: ProviderUsageWindow? = nil,
+        planType: String?
+    ) {
+        self.primary = primary
+        self.secondary = secondary
+        self.fiveHour = fiveHour
+        self.oneWeek = oneWeek
+        self.planType = planType
+    }
+
+    public func selectedWindow(for quota: QuotaSelection) -> ProviderUsageWindow? {
+        switch quota {
+        case .session:
+            // During Codex rollout tests the account may expose only the
+            // weekly cap. In that case the menu bar should still show the real
+            // available quota rather than failing because "Session" was saved
+            // in an older/default config.
+            return fiveHour ?? oneWeek ?? primary ?? secondary
+        case .weekly:
+            return oneWeek ?? fiveHour ?? secondary ?? primary
+        }
+    }
 }
 
 public enum CodexRPCClient {
@@ -166,32 +195,121 @@ public enum CodexRPCClient {
             throw CodexRPCError("Invalid Codex rate limits response")
         }
 
-        let primary = parseWindow(rateLimits["primary"])
-        let secondary = parseWindow(rateLimits["secondary"])
+        let primaryParsed = parseWindow(rateLimits["primary"])
+        let secondaryParsed = parseWindow(rateLimits["secondary"])
+        let primary = primaryParsed?.window
+        let secondary = secondaryParsed?.window
         guard primary != nil || secondary != nil else {
             throw CodexRPCError("No Codex rate limits available yet")
         }
 
+        let standard = classifyStandardWindows(primary: primaryParsed, secondary: secondaryParsed)
         return CodexRateLimitResult(
             primary: primary,
             secondary: secondary,
+            fiveHour: standard.fiveHour,
+            oneWeek: standard.oneWeek,
             planType: rateLimits["planType"] as? String
         )
     }
 
-    private static func parseWindow(_ value: Any?) -> ProviderUsageWindow? {
+    private struct ParsedCodexWindow {
+        let window: ProviderUsageWindow
+        let resetsAt: Date?
+        let hintedKind: CodexWindowKind?
+    }
+
+    private enum CodexWindowKind {
+        case fiveHour
+        case oneWeek
+    }
+
+    private static func parseWindow(_ value: Any?) -> ParsedCodexWindow? {
         guard let dict = value as? [String: Any],
               let number = dict["usedPercent"] as? NSNumber else {
             return nil
         }
         let used = min(100, max(0, Int(number.doubleValue.rounded())))
-        let reset: String?
-        if let resetsAt = dict["resetsAt"] as? NSNumber {
-            reset = resetText(Date(timeIntervalSince1970: resetsAt.doubleValue))
+        let resetsAt: Date?
+        if let rawResetsAt = dict["resetsAt"] as? NSNumber {
+            resetsAt = Date(timeIntervalSince1970: rawResetsAt.doubleValue)
         } else {
-            reset = nil
+            resetsAt = nil
         }
-        return ProviderUsageWindow(percentUsed: used, resetDescription: reset)
+        return ParsedCodexWindow(
+            window: ProviderUsageWindow(
+                percentUsed: used,
+                resetDescription: resetsAt.map(resetText),
+                resetsAt: resetsAt
+            ),
+            resetsAt: resetsAt,
+            hintedKind: kindHint(from: dict, resetsAt: resetsAt)
+        )
+    }
+
+    private static func classifyStandardWindows(
+        primary: ParsedCodexWindow?,
+        secondary: ParsedCodexWindow?
+    ) -> (fiveHour: ProviderUsageWindow?, oneWeek: ProviderUsageWindow?) {
+        var fiveHour: ProviderUsageWindow?
+        var oneWeek: ProviderUsageWindow?
+
+        func assign(_ parsed: ParsedCodexWindow?, fallback: CodexWindowKind) {
+            guard let parsed else { return }
+            switch parsed.hintedKind ?? fallback {
+            case .fiveHour:
+                if fiveHour == nil { fiveHour = parsed.window }
+                else if oneWeek == nil { oneWeek = parsed.window }
+            case .oneWeek:
+                if oneWeek == nil { oneWeek = parsed.window }
+                else if fiveHour == nil { fiveHour = parsed.window }
+            }
+        }
+
+        if primary != nil && secondary != nil {
+            // Historical Codex shape: primary = 5-hour, secondary = weekly.
+            // Explicit hints still win if the RPC starts labeling windows.
+            assign(primary, fallback: .fiveHour)
+            assign(secondary, fallback: .oneWeek)
+        } else {
+            // New test shape can expose only one weekly window. With no hint,
+            // keep the old assumption for a sole primary and weekly for a sole
+            // secondary, but reset distance can identify the weekly-only case.
+            assign(primary, fallback: .fiveHour)
+            assign(secondary, fallback: .oneWeek)
+        }
+
+        return (fiveHour, oneWeek)
+    }
+
+    private static func kindHint(from dict: [String: Any], resetsAt: Date?) -> CodexWindowKind? {
+        let text = dict.values.compactMap { value -> String? in
+            switch value {
+            case let string as String:
+                return string.lowercased()
+            case let nested as [String: Any]:
+                return nested.values.compactMap { $0 as? String }.joined(separator: " ").lowercased()
+            default:
+                return nil
+            }
+        }.joined(separator: " ")
+
+        if text.contains("five_hour") || text.contains("5-hour") || text.contains("5 hour") || text.contains("5h") || text.contains("session") {
+            return .fiveHour
+        }
+        if text.contains("seven_day") || text.contains("7-day") || text.contains("7 day") || text.contains("7d") || text.contains("weekly") || text.contains("week") {
+            return .oneWeek
+        }
+
+        guard let resetsAt else { return nil }
+        let remaining = resetsAt.timeIntervalSinceNow
+        if remaining > 24 * 3600 {
+            return .oneWeek
+        }
+        if remaining > 0 && remaining <= 12 * 3600 {
+            return .fiveHour
+        }
+        return nil
     }
 
     private static func resetText(_ date: Date) -> String {

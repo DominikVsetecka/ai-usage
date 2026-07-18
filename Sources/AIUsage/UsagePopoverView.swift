@@ -77,8 +77,8 @@ struct UsagePopoverView: View {
 
         let providersHeight = enabledSnapshots.reduce(CGFloat(0)) { total, snapshot in
             let source = config.sources.first(where: { $0.id == snapshot.sourceID })
-            var visibleRows = (source?.resolvedShowFiveHourInPopover ?? true ? 1 : 0)
-                + (source?.resolvedShowOneWeekInPopover ?? true ? 1 : 0)
+            var visibleRows = ((source?.resolvedShowFiveHourInPopover ?? true) && snapshot.fiveHour != nil ? 1 : 0)
+                + ((source?.resolvedShowOneWeekInPopover ?? true) && snapshot.oneWeek != nil ? 1 : 0)
             if source?.resolvedShowExtraInPopover ?? true {
                 visibleRows += snapshot.extraWindows.count
             }
@@ -279,7 +279,7 @@ private struct ProviderDetailSection: View {
                 statusBadge
             }
 
-            if source?.resolvedShowFiveHourInPopover ?? true {
+            if (source?.resolvedShowFiveHourInPopover ?? true), snapshot.fiveHour != nil {
                 WindowRow(
                     title: "5-hour",
                     window: snapshot.fiveHour,
@@ -303,7 +303,7 @@ private struct ProviderDetailSection: View {
                     estimate: fiveHourEstimate
                 )
             }
-            if source?.resolvedShowOneWeekInPopover ?? true {
+            if (source?.resolvedShowOneWeekInPopover ?? true), snapshot.oneWeek != nil {
                 WindowRow(
                     title: "1-week",
                     window: snapshot.oneWeek,
