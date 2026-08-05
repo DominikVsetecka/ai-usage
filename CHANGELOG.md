@@ -2,6 +2,18 @@
 
 All notable changes to AI Usage are documented in this file.
 
+## 1.7 — 2026-08-06
+
+### Added
+
+- The Secure profile connection now shows **which account an import would actually copy**, before you click. The import has always had exactly one source — whichever account Claude Code is signed in with at that moment — but nothing said so, so importing a second subscription while still signed in as the first silently gave both connections the same account. A "Will import" row now names that account (with a refresh button to re-check after switching logins).
+- A warning when the account about to be imported is already used by another connection, naming which one — the exact case that leaves two connections reporting identical usage.
+- A "Wrong account shown?" section explaining that the import follows the current Claude Code login, how to switch it (`/logout` then `/login`), that `/login` hands off to the browser — so whichever account is signed in at claude.ai is the one that comes back, which is the easiest way to land on the first account again without noticing — that other connections keep their own imported credentials and are unaffected, and that the account name in `~/.claude.json` can briefly lag behind the credentials themselves.
+
+### Fixed
+
+- Re-importing into an existing connection reuses its profile ID, so any usage still cached under that ID belonged to the *previous* account and stayed eligible until the TTL expired. Import and removal now clear the cache for that profile, so the newly connected account's numbers show up immediately instead of after up to one refresh interval.
+
 ## 1.6 — 2026-07-18
 
 ### Fixed

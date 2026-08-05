@@ -12,6 +12,22 @@ public struct ClaudeCodeCredentialImporter: Sendable {
         self.homeDirectory = homeDirectory
     }
 
+    /// Read-only look at which Claude Code account an import would pick up right
+    /// now, without writing anything to the Keychain or touching a profile.
+    /// The import has exactly one source — whichever account Claude Code is
+    /// signed in with at that moment — so Settings shows this up front instead
+    /// of letting the user find out afterwards that both connections ended up
+    /// on the same account.
+    public func detectCurrentAccount() -> ClaudeCodeAccountPreview? {
+        guard let imported = try? readCurrentCredentials() else { return nil }
+        let metadata = readAccountMetadata()
+        return ClaudeCodeAccountPreview(
+            label: metadata.label,
+            identifier: metadata.identifier,
+            credentialSourceDescription: imported.source
+        )
+    }
+
     public func importCurrentAccount(profileID: UUID? = nil, preferredName: String) throws -> ImportedClaudeProfile {
         let imported = try readCurrentCredentials()
         let metadata = readAccountMetadata()

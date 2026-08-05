@@ -10,8 +10,19 @@ struct SettingsView: View {
     let historyStore: UsageHistoryStore
     let onSave: (AppConfig) -> Void
     let onCancel: () -> Void
+    /// Called when a Claude profile's stored credentials change (import or
+    /// removal), so the long-lived usage service can drop anything it still has
+    /// cached for that profile ID — otherwise a re-import that keeps the same
+    /// profile ID can briefly keep serving the previous account's numbers.
+    let onCredentialsChanged: (UUID) -> Void
 
     @State private var selectedPanelID: String = SettingsPanel.general.id
+    /// Which account an import would pick up right now. Detected once for the
+    /// whole Connections panel rather than per section, so opening it spawns a
+    /// single `security` lookup instead of one per Claude connection.
+    @State private var detectedClaudeAccount: ClaudeCodeAccountPreview?
+    @State private var isDetectingClaudeAccount = false
+    @State private var didDetectClaudeAccount = false
 
     enum SettingsPanel: String, CaseIterable, Identifiable {
         case general, menuBar, popover, notifications, connections, history, about
@@ -56,13 +67,15 @@ struct SettingsView: View {
         historyStore: UsageHistoryStore,
         snapshots: [UsageSnapshot],
         onSave: @escaping (AppConfig) -> Void,
-        onCancel: @escaping () -> Void
+        onCancel: @escaping () -> Void,
+        onCredentialsChanged: @escaping (UUID) -> Void = { _ in }
     ) {
         _draft = State(initialValue: config)
         _latestSnapshots = State(initialValue: snapshots)
         self.historyStore = historyStore
         self.onSave = onSave
         self.onCancel = onCancel
+        self.onCredentialsChanged = onCredentialsChanged
     }
 
     var body: some View {
@@ -298,14 +311,49 @@ struct SettingsView: View {
             ForEach(draft.sources.indices, id: \.self) { index in
                 ProviderSettingsSection(
                     source: $draft.sources[index],
-                    snapshot: latestSnapshots.first(where: { $0.sourceID == draft.sources[index].id })
+                    snapshot: latestSnapshots.first(where: { $0.sourceID == draft.sources[index].id }),
+                    detectedAccount: detectedClaudeAccount,
+                    isDetectingAccount: isDetectingClaudeAccount,
+                    didDetectAccount: didDetectClaudeAccount,
+                    accountsUsedElsewhere: accountsUsedElsewhere(excluding: index),
+                    onRedetectAccount: { detectClaudeCodeAccount() },
+                    onCredentialsChanged: onCredentialsChanged
                 )
             }
         }
         .formStyle(.grouped)
+        .task {
+            guard !didDetectClaudeAccount else { return }
+            detectClaudeCodeAccount()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .aiUsageSnapshotsDidUpdate)) { notification in
             guard let snapshots = notification.object as? [UsageSnapshot] else { return }
             latestSnapshots = snapshots
+        }
+    }
+
+    /// Claude account UUIDs already imported by *other* connections, mapped to
+    /// the name of the connection using them — lets a section warn before you
+    /// import an account a different connection is already on (which is exactly
+    /// how both connections silently end up showing the same usage).
+    private func accountsUsedElsewhere(excluding index: Int) -> [String: String] {
+        var result: [String: String] = [:]
+        for (otherIndex, source) in draft.sources.enumerated() where otherIndex != index {
+            guard let identifier = source.claudeProfile?.accountIdentifier else { continue }
+            result[identifier] = source.label
+        }
+        return result
+    }
+
+    private func detectClaudeCodeAccount() {
+        isDetectingClaudeAccount = true
+        Task {
+            let preview = await Task.detached(priority: .userInitiated) {
+                ClaudeCodeCredentialImporter().detectCurrentAccount()
+            }.value
+            detectedClaudeAccount = preview
+            isDetectingClaudeAccount = false
+            didDetectClaudeAccount = true
         }
     }
 
@@ -592,6 +640,12 @@ private struct VisualBarPreviewRow: View {
 private struct ProviderSettingsSection: View {
     @Binding var source: SourceConfig
     let snapshot: UsageSnapshot?
+    let detectedAccount: ClaudeCodeAccountPreview?
+    let isDetectingAccount: Bool
+    let didDetectAccount: Bool
+    let accountsUsedElsewhere: [String: String]
+    let onRedetectAccount: () -> Void
+    let onCredentialsChanged: (UUID) -> Void
 
     private enum TestState {
         case idle, testing, ok(Int), failed(String)
@@ -610,6 +664,14 @@ private struct ProviderSettingsSection: View {
     private var isClaude: Bool { source.id.hasPrefix("claude") }
     private var usesClaudeProfile: Bool { source.mode == .claudeOAuth }
     private var isCodex: Bool { source.mode == .codexRPC }
+
+    /// The other connection already using the account an import would pick up,
+    /// if any — i.e. the case that silently leaves two connections reporting
+    /// the same usage.
+    private var detectedAccountConflict: String? {
+        guard let identifier = detectedAccount?.identifier else { return nil }
+        return accountsUsedElsewhere[identifier]
+    }
 
     private var canTest: Bool {
         if usesClaudeProfile { return source.claudeProfile != nil }
@@ -845,6 +907,56 @@ private struct ProviderSettingsSection: View {
             }
         }
 
+        LabeledContent("Will import") {
+            HStack(spacing: 6) {
+                if isDetectingAccount {
+                    ProgressView().controlSize(.mini)
+                    Text("Checking…").foregroundStyle(.secondary)
+                } else if let detectedAccount {
+                    Text(detectedAccount.label ?? "Signed in — account name unavailable")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else if didDetectAccount {
+                    Text("No signed-in Claude Code account found")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("—").foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    onRedetectAccount()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .disabled(isDetectingAccount)
+                .help("Check again which account Claude Code is signed in with")
+            }
+        }
+
+        if let conflictingConnection = detectedAccountConflict {
+            Label(
+                "That's the same account as \"\(conflictingConnection)\". Importing it here would leave both connections showing the same usage — switch the Claude Code login first.",
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .foregroundStyle(.orange)
+            .font(.callout)
+        }
+
+        DisclosureGroup("Wrong account shown?") {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("The import always copies whichever account Claude Code is signed in with right now — there is no per-connection account picker.")
+                Text("To connect a different account: run \"claude\" in a terminal and use /logout, then /login. Come back, hit the refresh arrow above to confirm the name changed, then import.")
+                Text("/login hands off to your browser, so whichever account is signed in at claude.ai is the one you get back — switch accounts there first, or run the login in a private window. This is the easiest place to end up back on the first account without noticing.")
+                Text("Your other connections are unaffected — each one keeps its own imported copy of the credentials, so switching the Claude Code login never changes them.")
+                Text("Name still showing the previous account? Claude Code only rewrites it in ~/.claude.json once it re-fetches your profile, so the name can lag a moment behind the credentials themselves.")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.top, 4)
+        }
+
         HStack(spacing: 10) {
             Button {
                 importCurrentClaudeAccount()
@@ -931,6 +1043,10 @@ private struct ProviderSettingsSection: View {
                 source.localPath = nil
                 importState = .imported(imported.credentialSourceDescription)
                 testState = .idle
+                // The profile ID is reused on a re-import, so anything the
+                // usage service still has cached for it belongs to the previous
+                // account — drop it rather than let it be served as current.
+                onCredentialsChanged(imported.profile.id)
             } catch {
                 importState = .failed(error.localizedDescription)
             }
@@ -948,6 +1064,7 @@ private struct ProviderSettingsSection: View {
                 source.claudeProfile = nil
                 testState = .idle
                 importState = .idle
+                onCredentialsChanged(profileID)
             } catch {
                 importState = .failed(error.localizedDescription)
             }
@@ -1528,7 +1645,7 @@ private struct InfoView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Text("Version 1.6 · 2026-07-18")
+            Text("Version 1.7 · 2026-08-06")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

@@ -82,6 +82,16 @@ final class StatusBarController {
         popover?.performClose(nil)
     }
 
+    /// Drop any cached usage held for a profile whose stored credentials just
+    /// changed. Without this, re-importing into an existing profile keeps its
+    /// ID, so the cache entry from the previous account stays eligible until
+    /// the TTL expires.
+    func clearOAuthCache(profileID: UUID) {
+        Task {
+            await oauthUsageService.clearCache(profileID: profileID)
+        }
+    }
+
     func apply(config: AppConfig) {
         self.config = config
         self.monitor = UsageMonitor(config: config, oauthService: oauthUsageService)

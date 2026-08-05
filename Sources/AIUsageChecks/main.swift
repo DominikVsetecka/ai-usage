@@ -380,6 +380,41 @@ check(forcedUsage.session?.percentUsed == 44, "forced Claude OAuth refresh shoul
 let forcedRequests = await cacheTransport.requests
 check(forcedRequests.count == 2, "forced Claude OAuth refresh should make a new HTTP call")
 
+// Credential change: re-importing an account into an existing profile keeps the
+// profile ID, so the cache entry left over from the *previous* account would
+// stay eligible for the rest of the TTL and be served as if it were current.
+// Settings therefore clears the cache for that profile ID on every import and
+// removal — this guards that clearing really does force the next read onto the
+// network, since the whole point is that the new account's numbers show up
+// immediately rather than after the TTL.
+let reimportProfileID = UUID()
+let reimportStore = MemoryClaudeCredentialStore()
+try reimportStore.save(
+    ClaudeOAuthCredentials(
+        accessToken: "reimport-fixture-access",
+        refreshToken: nil,
+        expiresAtMilliseconds: (Date().timeIntervalSince1970 + 3600) * 1_000
+    ),
+    profileID: reimportProfileID
+)
+let reimportTransport = QueueHTTPTransport(responses: [
+    HTTPResult(data: oauthUsageFixture, statusCode: 200),
+    HTTPResult(data: oauthUsageUpdatedFixture, statusCode: 200)
+])
+let reimportService = ClaudeOAuthUsageService(
+    store: reimportStore,
+    transport: reimportTransport,
+    cacheTTL: 3600,
+    minForceFetchInterval: 3600
+)
+let beforeReimport = try await reimportService.fetch(profileID: reimportProfileID)
+check(beforeReimport.session?.percentUsed == 22, "cache should hold the previous account's usage before a re-import")
+await reimportService.clearCache(profileID: reimportProfileID)
+let afterReimport = try await reimportService.fetch(profileID: reimportProfileID)
+check(afterReimport.session?.percentUsed == 44, "clearing a profile's cache must force a fresh read for the newly imported account")
+let reimportRequests = await reimportTransport.requests
+check(reimportRequests.count == 2, "clearing a profile's cache should produce a second HTTP call even inside the TTL")
+
 // Force throttle: rapid manual refreshes must not each hit the network. A
 // client-side floor (minForceFetchInterval) serves cache instead — this is
 // what stops button-spamming from tripping the server's 429 rate limit.

@@ -43,7 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindowController.show(
             config: controller.config,
             historyStore: controller.historyStore,
-            snapshots: controller.snapshots
+            snapshots: controller.snapshots,
+            onCredentialsChanged: { [weak self] profileID in
+                self?.statusBarController?.clearOAuthCache(profileID: profileID)
+            }
         ) { [weak self] config in
             guard let self else { return }
             do {

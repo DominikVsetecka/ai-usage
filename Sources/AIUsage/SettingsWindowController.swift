@@ -8,6 +8,7 @@ final class SettingsWindowController: NSWindowController {
         config: AppConfig,
         historyStore: UsageHistoryStore,
         snapshots: [UsageSnapshot],
+        onCredentialsChanged: @escaping (UUID) -> Void,
         onSave: @escaping (AppConfig) -> Void
     ) {
         let view = SettingsView(
@@ -19,7 +20,8 @@ final class SettingsWindowController: NSWindowController {
             },
             onCancel: { [weak self] in
                 self?.close()
-            }
+            },
+            onCredentialsChanged: onCredentialsChanged
         )
 
         if window == nil {
