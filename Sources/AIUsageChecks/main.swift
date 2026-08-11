@@ -379,6 +379,15 @@ check(
 let guidedStatus = ClaudeGuidedLoginService.parseAuthStatus(#"{"loggedIn":true,"authMethod":"claude.ai","account":{"email":"person@company.invalid"}}"#)
 check(guidedStatus?.loggedIn == true, "guided login should parse a successful Claude auth status")
 check(guidedStatus?.accountEmail == "person@company.invalid", "guided login should find a nested account email when Claude reports one")
+let manualLoginURL = ClaudeGuidedLoginService.manualLoginURL(from: """
+Opening browser to sign in…
+If the browser didn't open, visit: https://claude.example.invalid/oauth?state=fixture&redirect=manual
+Paste code here if prompted >
+""")
+check(
+    manualLoginURL?.absoluteString == "https://claude.example.invalid/oauth?state=fixture&redirect=manual",
+    "guided login should expose Claude's manual authorization-code fallback URL"
+)
 check(
     ClaudeGuidedLoginService.chromeBrowserHelperScript.contains("AI_USAGE_CHROME_PROFILE"),
     "guided login browser helper should route OAuth through the selected Chrome profile"
@@ -418,6 +427,29 @@ try await Task.sleep(for: .milliseconds(100))
 ptyCancellationToken.cancel()
 let ptyCancellationSucceeded = await ptyCancellationCheck.value
 check(ptyCancellationSucceeded, "guided login should be cancellable while waiting for browser authentication")
+
+let ptyInputToken = PTYCancellationToken()
+let ptyInputCheck = Task.detached { () -> String in
+    do {
+        return try InteractivePTYRunner().run(
+            executable: "/bin/sh",
+            arguments: ["-c", "read value; printf 'received:%s' \"$value\""],
+            environment: [:],
+            timeout: 5,
+            autoResponses: [:],
+            cancellationToken: ptyInputToken
+        ).output
+    } catch {
+        return "error: \(error.localizedDescription)"
+    }
+}
+try await Task.sleep(for: .milliseconds(100))
+ptyInputToken.sendLine("fixture-authorization-code")
+let ptyInputOutput = await ptyInputCheck.value
+check(
+    ptyInputOutput.contains("received:fixture-authorization-code"),
+    "guided login should forward a pasted authorization code into the waiting PTY"
+)
 
 let profile = ClaudeProfile(
     id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,

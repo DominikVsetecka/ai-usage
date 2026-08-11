@@ -15,6 +15,10 @@ All notable changes to AI Usage are documented in this file.
 
 - The old global-Keychain import remains available as an advanced Secure-profile workflow. The Connections UI now recommends the guided isolated login for two accounts instead of asking users to log the global Claude Code account out and back in.
 
+### Fixed
+
+- Company SSO can finish even when Claude Code's automatic localhost browser callback does not return. The wizard now exposes Claude's official alternative sign-in page and accepts the resulting authorization code, forwarding it into the already waiting CLI process instead of remaining on "Waiting for browser…" indefinitely.
+
 ## 1.8 — 2026-08-12
 
 ### Fixed

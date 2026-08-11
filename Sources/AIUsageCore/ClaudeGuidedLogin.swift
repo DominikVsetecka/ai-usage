@@ -120,7 +120,8 @@ public struct ClaudeGuidedLoginService: Sendable {
         usesSSO: Bool,
         chromeProfile: ClaudeChromeProfile,
         claudeExecutable: String,
-        cancellationToken: PTYCancellationToken? = nil
+        cancellationToken: PTYCancellationToken? = nil,
+        outputHandler: (@Sendable (String) -> Void)? = nil
     ) throws -> ClaudeGuidedLoginResult {
         let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard cleanEmail.contains("@"), !cleanEmail.contains(" ") else {
@@ -147,7 +148,8 @@ public struct ClaudeGuidedLoginService: Sendable {
                 timeout: 10 * 60,
                 autoResponses: [:],
                 removedEnvironmentKeys: Self.conflictingAuthenticationEnvironmentKeys,
-                cancellationToken: cancellationToken
+                cancellationToken: cancellationToken,
+                outputHandler: outputHandler
             )
         } catch PTYRunnerError.timedOut {
             throw ClaudeGuidedLoginError.loginTimedOut
@@ -188,6 +190,17 @@ public struct ClaudeGuidedLoginService: Sendable {
         return status
     }
 
+    public func openInChrome(_ url: URL, profile: ClaudeChromeProfile) throws {
+        let helper = try prepareChromeBrowserHelper()
+        let process = Process()
+        process.executableURL = helper
+        process.arguments = [url.absoluteString]
+        var environment = ProcessInfo.processInfo.environment
+        environment["AI_USAGE_CHROME_PROFILE"] = profile.directoryName
+        process.environment = environment
+        try process.run()
+    }
+
     public static func configDirectory(homeDirectory: URL, connectionID: String) -> URL {
         let safeID = connectionID.unicodeScalars.map { scalar -> Character in
             CharacterSet.alphanumerics.contains(scalar) || scalar == "-" || scalar == "_"
@@ -214,6 +227,20 @@ public struct ClaudeGuidedLoginService: Sendable {
             return nil
         }
         return ClaudeAuthStatus(loggedIn: loggedIn, accountEmail: findEmail(in: root))
+    }
+
+    /// Claude Code prints a second OAuth URL whose redirect shows a code that
+    /// can be pasted into the waiting PTY when localhost callback delivery is
+    /// blocked by SSO, browser policy, VPN or profile isolation.
+    public static func manualLoginURL(from output: String) -> URL? {
+        let marker = "If the browser didn't open, visit:"
+        guard let markerRange = output.range(of: marker) else { return nil }
+        let remainder = output[markerRange.upperBound...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let rawURL = remainder.split(whereSeparator: \.isWhitespace).first else {
+            return nil
+        }
+        return URL(string: String(rawURL))
     }
 
     public static let chromeBrowserHelperScript = """

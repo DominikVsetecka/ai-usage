@@ -25,6 +25,7 @@ public enum PTYRunnerError: LocalizedError, Sendable {
 public final class PTYCancellationToken: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+    private var pendingInput: [Data] = []
 
     public init() {}
 
@@ -34,10 +35,27 @@ public final class PTYCancellationToken: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Queues one line of interactive input for the running PTY command.
+    /// This is used by browser-based authentication flows that occasionally
+    /// fall back to asking for an authorization code in the terminal.
+    public func sendLine(_ line: String) {
+        lock.lock()
+        pendingInput.append(Data((line + "\n").utf8))
+        lock.unlock()
+    }
+
     fileprivate var isCancelled: Bool {
         lock.lock()
         defer { lock.unlock() }
         return cancelled
+    }
+
+    fileprivate func takePendingInput() -> [Data] {
+        lock.lock()
+        defer { lock.unlock() }
+        let input = pendingInput
+        pendingInput.removeAll(keepingCapacity: true)
+        return input
     }
 }
 
@@ -51,7 +69,8 @@ public struct InteractivePTYRunner: Sendable {
         timeout: TimeInterval,
         autoResponses: [String: String],
         removedEnvironmentKeys: Set<String> = ["CLAUDE_CODE_OAUTH_TOKEN"],
-        cancellationToken: PTYCancellationToken? = nil
+        cancellationToken: PTYCancellationToken? = nil,
+        outputHandler: (@Sendable (String) -> Void)? = nil
     ) throws -> PTYCommandResult {
         let executablePath = NSString(string: executable).expandingTildeInPath
         guard FileManager.default.isExecutableFile(atPath: executablePath) else {
@@ -104,10 +123,17 @@ public struct InteractivePTYRunner: Sendable {
                 wasCancelled = true
                 break
             }
+
+            for input in cancellationToken?.takePendingInput() ?? [] {
+                try? primary.write(contentsOf: input)
+                lastMeaningfulData = Date()
+            }
+
             let before = output.count
             Self.readAvailable(fd: primaryFD, into: &output)
             if output.count > before {
                 lastMeaningfulData = Date()
+                outputHandler?(String(data: output, encoding: .utf8) ?? "")
             }
 
             let text = String(data: output, encoding: .utf8) ?? ""

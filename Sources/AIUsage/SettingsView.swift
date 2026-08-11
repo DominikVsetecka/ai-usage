@@ -1324,6 +1324,9 @@ private struct ClaudeGuidedLoginSheet: View {
     @State private var selectedChromeProfileID: String
     @State private var loginState: LoginState = .idle
     @State private var cancellationToken: PTYCancellationToken?
+    @State private var manualLoginURL: URL?
+    @State private var authorizationCode = ""
+    @State private var codeWasSubmitted = false
 
     init(
         connectionID: String,
@@ -1450,7 +1453,7 @@ private struct ClaudeGuidedLoginSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 610, height: 430)
+        .frame(width: 640, height: 540)
         .interactiveDismissDisabled(loginState.isRunning)
     }
 
@@ -1466,6 +1469,42 @@ private struct ClaudeGuidedLoginSheet: View {
                 Label("Finish signing in in Chrome. This window will detect completion automatically.", systemImage: "hourglass")
                 Text("If Chrome shows the wrong account, choose the selected profile in Chrome before continuing.")
                     .foregroundStyle(.secondary)
+                if let manualLoginURL {
+                    Divider()
+                        .padding(.vertical, 6)
+                    Text("Still waiting after completing SSO?")
+                        .fontWeight(.medium)
+                    Text("Use Claude's alternative sign-in page, then paste the authorization code it shows.")
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Button {
+                            if let selectedChromeProfile {
+                                do {
+                                    try ClaudeGuidedLoginService().openInChrome(
+                                        manualLoginURL,
+                                        profile: selectedChromeProfile
+                                    )
+                                } catch {
+                                    NSWorkspace.shared.open(manualLoginURL)
+                                }
+                            } else {
+                                NSWorkspace.shared.open(manualLoginURL)
+                            }
+                        } label: {
+                            Label("Open Alternative Sign-In", systemImage: "arrow.up.right")
+                        }
+                        TextField("Paste authorization code", text: $authorizationCode)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Submit Code") {
+                            submitAuthorizationCode()
+                        }
+                        .disabled(authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    if codeWasSubmitted {
+                        Label("Code submitted. Verifying the account…", systemImage: "checkmark")
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .font(.callout)
         case .succeeded(let account):
@@ -1501,6 +1540,9 @@ private struct ClaudeGuidedLoginSheet: View {
     private func startLogin() {
         guard let chromeProfile = selectedChromeProfile else { return }
         loginState = .running
+        manualLoginURL = nil
+        authorizationCode = ""
+        codeWasSubmitted = false
         let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         let service = ClaudeGuidedLoginService()
         let connectionID = connectionID
@@ -1519,7 +1561,15 @@ private struct ClaudeGuidedLoginSheet: View {
                             usesSSO: usesSSO,
                             chromeProfile: chromeProfile,
                             claudeExecutable: claudeExecutable,
-                            cancellationToken: cancellationToken
+                            cancellationToken: cancellationToken,
+                            outputHandler: { output in
+                                guard let url = ClaudeGuidedLoginService.manualLoginURL(from: output) else {
+                                    return
+                                }
+                                Task { @MainActor in
+                                    manualLoginURL = url
+                                }
+                            }
                         )
                     )
                 } catch {
@@ -1537,6 +1587,14 @@ private struct ClaudeGuidedLoginSheet: View {
                 loginState = .failed(message)
             }
         }
+    }
+
+    private func submitAuthorizationCode() {
+        let code = authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else { return }
+        cancellationToken?.sendLine(code)
+        authorizationCode = ""
+        codeWasSubmitted = true
     }
 }
 

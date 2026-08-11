@@ -101,7 +101,8 @@ This is the reliable path when both Claude accounts should stay signed in at the
 2. Click **Set Up Separate Claude Account…**.
 3. Select the Chrome profile that is already signed into that account, confirm the email, and enable company SSO when required.
 4. Click **Open Browser & Sign In** and finish Anthropic's official Claude Code login in Chrome.
-5. Once AI Usage reports the connected account, close the wizard and choose **Save & Refresh**.
+5. If company SSO finishes but the wizard still waits, click **Open Alternative Sign-In**, complete that page, and paste the authorization code it shows into the wizard.
+6. Once AI Usage reports the connected account, close the wizard and choose **Save & Refresh**.
 
 AI Usage creates a dedicated directory under `~/.ai-usage/claude-accounts/` and assigns it only to that connection. It never reads Chrome cookies or passwords, and it does not alter the Claude login used by another connection, Terminal, VS Code or Zed.
 
