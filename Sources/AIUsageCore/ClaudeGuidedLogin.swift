@@ -130,6 +130,22 @@ public struct ClaudeGuidedLoginService: Sendable {
 
         let configURL = Self.configDirectory(homeDirectory: homeDirectory, connectionID: connectionID)
         try FileManager.default.createDirectory(at: configURL, withIntermediateDirectories: true)
+
+        // A browser login may already have completed even if an earlier UI
+        // attempt failed later while probing `/usage`. Reuse that isolated
+        // credential instead of forcing another SSO round-trip.
+        if let existing = try? authenticationStatus(
+            configDirectory: configURL.path,
+            claudeExecutable: claudeExecutable
+        ), existing.loggedIn,
+           existing.accountEmail == nil ||
+            existing.accountEmail?.localizedCaseInsensitiveCompare(cleanEmail) == .orderedSame {
+            return ClaudeGuidedLoginResult(
+                configDirectory: configURL.path,
+                accountLabel: existing.accountEmail ?? cleanEmail
+            )
+        }
+
         let browserHelper = try prepareChromeBrowserHelper()
 
         var arguments = ["auth", "login", "--claudeai", "--email", cleanEmail]

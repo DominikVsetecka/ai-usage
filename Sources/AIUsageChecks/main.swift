@@ -376,6 +376,12 @@ check(
     guidedDirectory.path == "/tmp/ai-usage-guided-home/.ai-usage/claude-accounts/claude-work-1",
     "guided login should create a stable, sanitized config directory per connection"
 )
+check(
+    ClaudeCodeCredentialImporter.keychainService(
+        configDirectory: "/tmp/ai-usage-guided-home/.ai-usage/claude-accounts/claude1"
+    ) == "Claude Code-credentials-4201dec3",
+    "guided secure import should derive Claude Code's targeted config-directory Keychain service"
+)
 let guidedStatus = ClaudeGuidedLoginService.parseAuthStatus(#"{"loggedIn":true,"authMethod":"claude.ai","account":{"email":"person@company.invalid"}}"#)
 check(guidedStatus?.loggedIn == true, "guided login should parse a successful Claude auth status")
 check(guidedStatus?.accountEmail == "person@company.invalid", "guided login should find a nested account email when Claude reports one")
@@ -863,10 +869,20 @@ if ProcessInfo.processInfo.environment["AI_USAGE_LIVE_CLAUDE_OAUTH_CHECK"] == "1
     let liveProfileID = UUID()
     let liveStore = KeychainClaudeCredentialStore()
     defer { try? liveStore.delete(profileID: liveProfileID) }
-    _ = try ClaudeCodeCredentialImporter(store: liveStore).importCurrentAccount(
-        profileID: liveProfileID,
-        preferredName: "Temporary Live Check"
-    )
+    let liveImporter = ClaudeCodeCredentialImporter(store: liveStore)
+    if let configDirectory = ProcessInfo.processInfo.environment["AI_USAGE_LIVE_CLAUDE_CONFIG_DIR"],
+       !configDirectory.isEmpty {
+        _ = try liveImporter.importAccount(
+            configDirectory: configDirectory,
+            profileID: liveProfileID,
+            preferredName: "Temporary Isolated Live Check"
+        )
+    } else {
+        _ = try liveImporter.importCurrentAccount(
+            profileID: liveProfileID,
+            preferredName: "Temporary Live Check"
+        )
+    }
     let liveService = ClaudeOAuthUsageService(store: liveStore, cacheTTL: 0)
     let liveUsage = try await liveService.fetch(profileID: liveProfileID, force: true)
     check(liveUsage.session != nil || liveUsage.weekly != nil, "live Claude OAuth check should return usage")

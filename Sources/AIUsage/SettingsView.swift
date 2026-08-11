@@ -916,20 +916,23 @@ private struct ProviderSettingsSection: View {
             ClaudeGuidedLoginSheet(
                 connectionID: source.id,
                 connectionName: providerName,
-                initialEmail: source.claudeCLIAccountLabel ?? "",
-                claudeExecutable: source.command?.executable ?? defaultCommand.executable
-            ) { result in
+                initialEmail: source.claudeCLIAccountLabel ?? source.claudeProfile?.accountLabel ?? "",
+                claudeExecutable: source.command?.executable ?? defaultCommand.executable,
+                existingProfileID: source.claudeProfile?.id
+            ) { _, profile in
                 var command = source.command ?? defaultCommand
                 command.executable = command.executable.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? defaultCommand.executable
                     : command.executable
                 command.timeoutSeconds = max(20, command.timeoutSeconds)
                 source.command = command
-                source.mode = .claudeCLI
-                source.localPath = result.configDirectory
-                source.claudeCLIAccountLabel = result.accountLabel
+                source.mode = .claudeOAuth
+                source.localPath = nil
+                source.claudeCLIAccountLabel = nil
+                source.claudeProfile = profile
                 source.enabled = true
                 testState = .idle
+                onCredentialsChanged(profile.id)
             }
         }
         .confirmationDialog(
@@ -1294,7 +1297,7 @@ private struct ProviderSettingsSection: View {
 }
 
 private enum ClaudeGuidedLoginOutcome: Sendable {
-    case success(ClaudeGuidedLoginResult)
+    case success(ClaudeGuidedLoginResult, ImportedClaudeProfile)
     case failure(String)
 }
 
@@ -1316,7 +1319,8 @@ private struct ClaudeGuidedLoginSheet: View {
     let connectionID: String
     let connectionName: String
     let claudeExecutable: String
-    let onConnected: (ClaudeGuidedLoginResult) -> Void
+    let existingProfileID: UUID?
+    let onConnected: (ClaudeGuidedLoginResult, ClaudeProfile) -> Void
 
     @State private var email: String
     @State private var usesSSO = false
@@ -1333,7 +1337,8 @@ private struct ClaudeGuidedLoginSheet: View {
         connectionName: String,
         initialEmail: String,
         claudeExecutable: String,
-        onConnected: @escaping (ClaudeGuidedLoginResult) -> Void
+        existingProfileID: UUID?,
+        onConnected: @escaping (ClaudeGuidedLoginResult, ClaudeProfile) -> Void
     ) {
         let profiles = ClaudeChromeProfileReader().profiles()
         let matchingProfile = profiles.first {
@@ -1345,6 +1350,7 @@ private struct ClaudeGuidedLoginSheet: View {
         self.connectionID = connectionID
         self.connectionName = connectionName
         self.claudeExecutable = claudeExecutable
+        self.existingProfileID = existingProfileID
         self.onConnected = onConnected
         _email = State(initialValue: suggestedEmail)
         _chromeProfiles = State(initialValue: profiles)
@@ -1408,7 +1414,7 @@ private struct ClaudeGuidedLoginSheet: View {
 
                     Toggle("Use company single sign-on (SSO)", isOn: $usesSSO)
 
-                    Text("AI Usage creates a dedicated Claude configuration for this connection and starts Anthropic's official `claude auth login`. It never reads Chrome cookies or your password.")
+                    Text("AI Usage signs this connection into a dedicated Claude configuration, then copies only that account's OAuth credential into an app-owned Secure Profile. It never reads Chrome cookies or your password.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -1444,7 +1450,7 @@ private struct ClaudeGuidedLoginSheet: View {
                             if loginState.isRunning {
                                 ProgressView().controlSize(.small)
                             }
-                            Text(loginState.isRunning ? "Waiting for browser…" : "Open Browser & Sign In")
+                            Text(loginState.isRunning ? "Finishing secure setup…" : "Connect Secure Account")
                         }
                     }
                     .keyboardShortcut(.defaultAction)
@@ -1461,7 +1467,7 @@ private struct ClaudeGuidedLoginSheet: View {
     private var loginStatus: some View {
         switch loginState {
         case .idle:
-            Label("The selected Chrome profile will open the official Claude login.", systemImage: "safari")
+            Label("The selected Chrome profile opens only if sign-in is still needed; an already completed login is reused.", systemImage: "safari")
                 .foregroundStyle(.secondary)
                 .font(.callout)
         case .running:
@@ -1546,7 +1552,9 @@ private struct ClaudeGuidedLoginSheet: View {
         let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         let service = ClaudeGuidedLoginService()
         let connectionID = connectionID
+        let connectionName = connectionName
         let claudeExecutable = claudeExecutable
+        let existingProfileID = existingProfileID
         let usesSSO = usesSSO
         let cancellationToken = PTYCancellationToken()
         self.cancellationToken = cancellationToken
@@ -1554,34 +1562,38 @@ private struct ClaudeGuidedLoginSheet: View {
         Task {
             let outcome = await Task.detached(priority: .userInitiated) {
                 do {
-                    return ClaudeGuidedLoginOutcome.success(
-                        try service.login(
-                            connectionID: connectionID,
-                            email: cleanEmail,
-                            usesSSO: usesSSO,
-                            chromeProfile: chromeProfile,
-                            claudeExecutable: claudeExecutable,
-                            cancellationToken: cancellationToken,
-                            outputHandler: { output in
-                                guard let url = ClaudeGuidedLoginService.manualLoginURL(from: output) else {
-                                    return
-                                }
-                                Task { @MainActor in
-                                    manualLoginURL = url
-                                }
+                    let result = try service.login(
+                        connectionID: connectionID,
+                        email: cleanEmail,
+                        usesSSO: usesSSO,
+                        chromeProfile: chromeProfile,
+                        claudeExecutable: claudeExecutable,
+                        cancellationToken: cancellationToken,
+                        outputHandler: { output in
+                            guard let url = ClaudeGuidedLoginService.manualLoginURL(from: output) else {
+                                return
                             }
-                        )
+                            Task { @MainActor in
+                                manualLoginURL = url
+                            }
+                        }
                     )
+                    let imported = try ClaudeCodeCredentialImporter().importAccount(
+                        configDirectory: result.configDirectory,
+                        profileID: existingProfileID,
+                        preferredName: connectionName
+                    )
+                    return ClaudeGuidedLoginOutcome.success(result, imported)
                 } catch {
                     return ClaudeGuidedLoginOutcome.failure(error.localizedDescription)
                 }
             }.value
 
             switch outcome {
-            case .success(let result):
+            case .success(let result, let imported):
                 self.cancellationToken = nil
-                onConnected(result)
-                loginState = .succeeded(result.accountLabel)
+                onConnected(result, imported.profile)
+                loginState = .succeeded(imported.profile.accountLabel ?? result.accountLabel)
             case .failure(let message):
                 self.cancellationToken = nil
                 loginState = .failed(message)

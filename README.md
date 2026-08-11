@@ -100,15 +100,15 @@ This is the reliable path when both Claude accounts should stay signed in at the
 1. Open Settings → Connections and choose the Claude connection you want to set up.
 2. Click **Set Up Separate Claude Account…**.
 3. Select the Chrome profile that is already signed into that account, confirm the email, and enable company SSO when required.
-4. Click **Open Browser & Sign In** and finish Anthropic's official Claude Code login in Chrome.
+4. Click **Connect Secure Account** and finish Anthropic's official Claude Code login in Chrome if it opens.
 5. If company SSO finishes but the wizard still waits, click **Open Alternative Sign-In**, complete that page, and paste the authorization code it shows into the wizard.
 6. Once AI Usage reports the connected account, close the wizard and choose **Save & Refresh**.
 
-AI Usage creates a dedicated directory under `~/.ai-usage/claude-accounts/` and assigns it only to that connection. It never reads Chrome cookies or passwords, and it does not alter the Claude login used by another connection, Terminal, VS Code or Zed.
+AI Usage creates a dedicated directory under `~/.ai-usage/claude-accounts/` for the official login. After verifying the account, it copies exactly that directory's OAuth credential into a separate app-owned Keychain entry and configures the connection as a Secure profile. It never reads Chrome cookies or passwords, and it does not alter the Claude login used by another connection, Terminal, VS Code or Zed.
 
-Guided accounts currently use the Claude CLI `/usage` connection. Extra model-scoped limits reported only by the direct OAuth API remain available through the advanced Secure-profile mode below.
+Guided accounts use the direct OAuth usage connection after setup, so they do not depend on Claude Code's `/usage` terminal UI and can also report extra model-scoped limits.
 
-**Advanced: Secure profile mode**
+**Advanced: import the current global Claude Code login**
 
 Each account gets its own isolated Keychain entry. After setup the `claude` CLI is no longer needed for those sources.
 

@@ -8,7 +8,7 @@ All notable changes to AI Usage are documented in this file.
 
 - Guided multi-account login in Settings → Connections. Each Claude connection can now create its own isolated `CLAUDE_CONFIG_DIR`, choose a local Chrome profile, pre-fill the account email, optionally force company SSO, and run Anthropic's official `claude auth login` without logging another account out.
 - Chrome-profile discovery reads only Chrome's non-secret local profile index (profile name and account label). The OAuth URL is routed to the selected profile by a tiny local browser launcher; AI Usage never reads cookies, browser sessions, passwords or page contents.
-- Successful login is verified with `claude auth status --json`, then the connection is automatically enabled and switched to its dedicated Claude CLI profile. The account label and isolated config path persist in AI Usage settings.
+- Successful login is verified with `claude auth status --json`. AI Usage then derives Claude Code's exact config-directory-specific Keychain service, copies only that credential into a separate app-owned Secure Profile, and enables the connection. The Claude Code source item is never modified.
 - The waiting login can be stopped safely from the wizard; the child CLI process is terminated without touching any other Claude login.
 
 ### Changed
@@ -18,6 +18,7 @@ All notable changes to AI Usage are documented in this file.
 ### Fixed
 
 - Company SSO can finish even when Claude Code's automatic localhost browser callback does not return. The wizard now exposes Claude's official alternative sign-in page and accepts the resulting authorization code, forwarding it into the already waiting CLI process instead of remaining on "Waiting for browser…" indefinitely.
+- A freshly authenticated isolated account no longer fails with "Could not parse Claude /usage output" when Claude Code shows its first-run theme/onboarding screen instead of usage. Guided accounts now finish as direct Secure-profile connections, so they do not depend on the `/usage` terminal UI and can report extra model-scoped limits.
 
 ## 1.8 — 2026-08-12
 

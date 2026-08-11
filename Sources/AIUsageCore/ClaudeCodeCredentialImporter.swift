@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -21,7 +22,7 @@ public struct ClaudeCodeCredentialImporter: Sendable {
     /// on the same account.
     public func detectCurrentAccount() throws -> ClaudeCodeAccountPreview {
         let imported = try readCurrentCredentials()
-        let metadata = readAccountMetadata()
+        let metadata = readAccountMetadata(in: homeDirectory)
         return ClaudeCodeAccountPreview(
             label: metadata.label,
             identifier: metadata.identifier,
@@ -31,7 +32,54 @@ public struct ClaudeCodeCredentialImporter: Sendable {
 
     public func importCurrentAccount(profileID: UUID? = nil, preferredName: String) throws -> ImportedClaudeProfile {
         let imported = try readCurrentCredentials()
-        let metadata = readAccountMetadata()
+        let metadata = readAccountMetadata(in: homeDirectory)
+        return try saveImportedProfile(
+            imported,
+            metadata: metadata,
+            profileID: profileID,
+            preferredName: preferredName
+        )
+    }
+
+    /// Imports the credential written by Claude Code for one explicit
+    /// `CLAUDE_CONFIG_DIR`. Claude Code derives a unique macOS Keychain service
+    /// from that path, so this remains one targeted lookup and never enumerates
+    /// unrelated Keychain entries.
+    public func importAccount(
+        configDirectory: String,
+        profileID: UUID? = nil,
+        preferredName: String
+    ) throws -> ImportedClaudeProfile {
+        let directory = Self.normalizedConfigDirectory(configDirectory)
+        let service = Self.keychainService(configDirectory: directory.path)
+        guard let data = try readKeychainData(service: service) else {
+            throw ClaudeCredentialImportError.notFound
+        }
+        let imported = (
+            credentials: try Self.parseCredentials(data),
+            source: "Isolated Claude Code Keychain"
+        )
+        return try saveImportedProfile(
+            imported,
+            metadata: readAccountMetadata(in: directory),
+            profileID: profileID,
+            preferredName: preferredName
+        )
+    }
+
+    public static func keychainService(configDirectory: String) -> String {
+        let path = normalizedConfigDirectory(configDirectory).path
+        let digest = SHA256.hash(data: Data(path.utf8))
+        let prefix = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
+        return "Claude Code-credentials-\(prefix)"
+    }
+
+    private func saveImportedProfile(
+        _ imported: (credentials: ClaudeOAuthCredentials, source: String),
+        metadata: (label: String?, identifier: String?),
+        profileID: UUID?,
+        preferredName: String
+    ) throws -> ImportedClaudeProfile {
         let id = profileID ?? UUID()
         try store.save(imported.credentials, profileID: id)
 
@@ -142,8 +190,8 @@ public struct ClaudeCodeCredentialImporter: Sendable {
         return data
     }
 
-    private func readAccountMetadata() -> (label: String?, identifier: String?) {
-        let url = homeDirectory.appendingPathComponent(".claude.json")
+    private func readAccountMetadata(in directory: URL) -> (label: String?, identifier: String?) {
+        let url = directory.appendingPathComponent(".claude.json")
         guard let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let account = root["oauthAccount"] as? [String: Any] else {
@@ -152,6 +200,11 @@ public struct ClaudeCodeCredentialImporter: Sendable {
         let label = (account["emailAddress"] as? String) ?? (account["organizationName"] as? String)
         let identifier = (account["accountUuid"] as? String) ?? (account["organizationUuid"] as? String)
         return (label, identifier)
+    }
+
+    private static func normalizedConfigDirectory(_ path: String) -> URL {
+        URL(fileURLWithPath: NSString(string: path).expandingTildeInPath, isDirectory: true)
+            .standardizedFileURL
     }
 }
 
