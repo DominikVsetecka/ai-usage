@@ -681,6 +681,7 @@ private struct ProviderSettingsSection: View {
     @State private var testState: TestState = .idle
     @State private var importState: ImportState = .idle
     @State private var confirmsProfileRemoval = false
+    @State private var showsGuidedClaudeLogin = false
 
     private var isClaude: Bool { source.id.hasPrefix("claude") }
     private var usesClaudeProfile: Bool { source.mode == .claudeOAuth }
@@ -767,9 +768,25 @@ private struct ProviderSettingsSection: View {
                 }
                 .pickerStyle(.segmented)
 
+                Button {
+                    showsGuidedClaudeLogin = true
+                } label: {
+                    Label("Set Up Separate Claude Account…", systemImage: "person.badge.plus")
+                }
+                .help("Sign in without changing the Claude account used by your other connection, IDEs or terminal")
+
                 if usesClaudeProfile {
                     claudeProfileControls
                 } else {
+                    if let account = source.claudeCLIAccountLabel {
+                        LabeledContent("Claude account") {
+                            Text(account)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+
                     TextField("Claude CLI path", text: executableBinding)
                         .textFieldStyle(.roundedBorder)
                         .disabled(!source.enabled)
@@ -895,6 +912,26 @@ private struct ProviderSettingsSection: View {
         }
         .onChange(of: source.command?.executable) { _ in testState = .idle }
         .onChange(of: source.mode) { _ in testState = .idle }
+        .sheet(isPresented: $showsGuidedClaudeLogin) {
+            ClaudeGuidedLoginSheet(
+                connectionID: source.id,
+                connectionName: providerName,
+                initialEmail: source.claudeCLIAccountLabel ?? "",
+                claudeExecutable: source.command?.executable ?? defaultCommand.executable
+            ) { result in
+                var command = source.command ?? defaultCommand
+                command.executable = command.executable.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? defaultCommand.executable
+                    : command.executable
+                command.timeoutSeconds = max(20, command.timeoutSeconds)
+                source.command = command
+                source.mode = .claudeCLI
+                source.localPath = result.configDirectory
+                source.claudeCLIAccountLabel = result.accountLabel
+                source.enabled = true
+                testState = .idle
+            }
+        }
         .confirmationDialog(
             "Remove secure Claude profile?",
             isPresented: $confirmsProfileRemoval,
@@ -966,11 +1003,10 @@ private struct ProviderSettingsSection: View {
             .font(.callout)
         }
 
-        DisclosureGroup("Wrong account shown?") {
+        DisclosureGroup("Advanced: import the current global login") {
             VStack(alignment: .leading, spacing: 6) {
-                Text("The import always copies whichever account Claude Code is signed in with right now — there is no per-connection account picker.")
-                Text("To connect a different account: run \"claude\" in a terminal and use /logout, then /login. Come back, hit the refresh arrow above to confirm the name changed, then import.")
-                Text("/login hands off to your browser, so whichever account is signed in at claude.ai is the one you get back — switch accounts there first, or run the login in a private window. This is the easiest place to end up back on the first account without noticing.")
+                Text("The import below copies whichever account the default Claude Code installation is using right now. It cannot select one of several Chrome sessions.")
+                Text("For two accounts, use “Set Up Separate Claude Account…” above. It creates an isolated official Claude Code login for this connection and does not log another account out.")
                 Text("Your other connections are unaffected — each one keeps its own imported copy of the credentials, so switching the Claude Code login never changes them.")
                 Text("Name still showing the previous account? Claude Code only rewrites it in ~/.claude.json once it re-fetches your profile, so the name can lag a moment behind the credentials themselves.")
             }
@@ -1255,6 +1291,253 @@ private struct ProviderSettingsSection: View {
         CodexAccountReader.currentAccountEmail()
     }
 
+}
+
+private enum ClaudeGuidedLoginOutcome: Sendable {
+    case success(ClaudeGuidedLoginResult)
+    case failure(String)
+}
+
+private struct ClaudeGuidedLoginSheet: View {
+    private enum LoginState {
+        case idle
+        case running
+        case succeeded(String)
+        case failed(String)
+
+        var isRunning: Bool {
+            if case .running = self { return true }
+            return false
+        }
+    }
+
+    @Environment(\.dismiss) private var dismiss
+
+    let connectionID: String
+    let connectionName: String
+    let claudeExecutable: String
+    let onConnected: (ClaudeGuidedLoginResult) -> Void
+
+    @State private var email: String
+    @State private var usesSSO = false
+    @State private var chromeProfiles: [ClaudeChromeProfile]
+    @State private var selectedChromeProfileID: String
+    @State private var loginState: LoginState = .idle
+    @State private var cancellationToken: PTYCancellationToken?
+
+    init(
+        connectionID: String,
+        connectionName: String,
+        initialEmail: String,
+        claudeExecutable: String,
+        onConnected: @escaping (ClaudeGuidedLoginResult) -> Void
+    ) {
+        let profiles = ClaudeChromeProfileReader().profiles()
+        let matchingProfile = profiles.first {
+            $0.accountEmail?.localizedCaseInsensitiveCompare(initialEmail) == .orderedSame
+        }
+        let selected = matchingProfile ?? profiles.first
+        let suggestedEmail = initialEmail.isEmpty ? (selected?.accountEmail ?? "") : initialEmail
+
+        self.connectionID = connectionID
+        self.connectionName = connectionName
+        self.claudeExecutable = claudeExecutable
+        self.onConnected = onConnected
+        _email = State(initialValue: suggestedEmail)
+        _chromeProfiles = State(initialValue: profiles)
+        _selectedChromeProfileID = State(initialValue: selected?.id ?? "")
+    }
+
+    private var selectedChromeProfile: ClaudeChromeProfile? {
+        chromeProfiles.first { $0.id == selectedChromeProfileID }
+    }
+
+    private var canStart: Bool {
+        !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        selectedChromeProfile != nil &&
+        !loginState.isRunning
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "person.2.badge.gearshape")
+                    .font(.system(size: 28))
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Set up a separate Claude account")
+                        .font(.title2.weight(.semibold))
+                    Text("For \(connectionName). Your other Claude connections and IDE logins stay unchanged.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 14) {
+                    LabeledContent("Account email") {
+                        TextField("name@company.com", text: $email)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 290)
+                    }
+
+                    LabeledContent("Open login in") {
+                        if chromeProfiles.isEmpty {
+                            HStack {
+                                Text("No Chrome profiles found")
+                                    .foregroundStyle(.red)
+                                Button("Check Again", action: reloadChromeProfiles)
+                            }
+                        } else {
+                            Picker("", selection: $selectedChromeProfileID) {
+                                ForEach(chromeProfiles) { profile in
+                                    Text(profileDisplayName(profile)).tag(profile.id)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 290)
+                            .onChange(of: selectedChromeProfileID) { _ in
+                                guard let selected = selectedChromeProfile,
+                                      let selectedEmail = selected.accountEmail else { return }
+                                email = selectedEmail
+                            }
+                        }
+                    }
+
+                    Toggle("Use company single sign-on (SSO)", isOn: $usesSSO)
+
+                    Text("AI Usage creates a dedicated Claude configuration for this connection and starts Anthropic's official `claude auth login`. It never reads Chrome cookies or your password.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(4)
+            }
+
+            loginStatus
+
+            Spacer(minLength: 0)
+
+            HStack {
+                if case .succeeded = loginState {
+                    Text("Close this window, then choose Save & Refresh in Settings.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if loginState.isRunning {
+                    Button("Stop") {
+                        cancellationToken?.cancel()
+                    }
+                } else {
+                    Button("Cancel") { dismiss() }
+                }
+                if case .succeeded = loginState {
+                    Button("Done") { dismiss() }
+                        .keyboardShortcut(.defaultAction)
+                } else {
+                    Button {
+                        startLogin()
+                    } label: {
+                        HStack(spacing: 6) {
+                            if loginState.isRunning {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(loginState.isRunning ? "Waiting for browser…" : "Open Browser & Sign In")
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canStart)
+                }
+            }
+        }
+        .padding(24)
+        .frame(width: 610, height: 430)
+        .interactiveDismissDisabled(loginState.isRunning)
+    }
+
+    @ViewBuilder
+    private var loginStatus: some View {
+        switch loginState {
+        case .idle:
+            Label("The selected Chrome profile will open the official Claude login.", systemImage: "safari")
+                .foregroundStyle(.secondary)
+                .font(.callout)
+        case .running:
+            VStack(alignment: .leading, spacing: 5) {
+                Label("Finish signing in in Chrome. This window will detect completion automatically.", systemImage: "hourglass")
+                Text("If Chrome shows the wrong account, choose the selected profile in Chrome before continuing.")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.callout)
+        case .succeeded(let account):
+            Label("Connected as \(account)", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.callout)
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 5) {
+                Label(message, systemImage: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+                Text("You can retry without logging out any other Claude account.")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.callout)
+        }
+    }
+
+    private func profileDisplayName(_ profile: ClaudeChromeProfile) -> String {
+        if let email = profile.accountEmail {
+            return "\(profile.displayName) — \(email)"
+        }
+        return profile.displayName
+    }
+
+    private func reloadChromeProfiles() {
+        let profiles = ClaudeChromeProfileReader().profiles()
+        chromeProfiles = profiles
+        if !profiles.contains(where: { $0.id == selectedChromeProfileID }) {
+            selectedChromeProfileID = profiles.first?.id ?? ""
+        }
+    }
+
+    private func startLogin() {
+        guard let chromeProfile = selectedChromeProfile else { return }
+        loginState = .running
+        let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let service = ClaudeGuidedLoginService()
+        let connectionID = connectionID
+        let claudeExecutable = claudeExecutable
+        let usesSSO = usesSSO
+        let cancellationToken = PTYCancellationToken()
+        self.cancellationToken = cancellationToken
+
+        Task {
+            let outcome = await Task.detached(priority: .userInitiated) {
+                do {
+                    return ClaudeGuidedLoginOutcome.success(
+                        try service.login(
+                            connectionID: connectionID,
+                            email: cleanEmail,
+                            usesSSO: usesSSO,
+                            chromeProfile: chromeProfile,
+                            claudeExecutable: claudeExecutable,
+                            cancellationToken: cancellationToken
+                        )
+                    )
+                } catch {
+                    return ClaudeGuidedLoginOutcome.failure(error.localizedDescription)
+                }
+            }.value
+
+            switch outcome {
+            case .success(let result):
+                self.cancellationToken = nil
+                onConnected(result)
+                loginState = .succeeded(result.accountLabel)
+            case .failure(let message):
+                self.cancellationToken = nil
+                loginState = .failed(message)
+            }
+        }
+    }
 }
 
 /// Tappable chips to show/hide individual series in the History chart, so a
@@ -1667,7 +1950,7 @@ private struct InfoView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Text("Version 1.8 · 2026-08-12")
+            Text("Version 1.9 · 2026-08-12")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

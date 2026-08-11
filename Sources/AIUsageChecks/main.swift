@@ -352,6 +352,73 @@ check(parsedCredentials.accessToken == "fixture-access", "Claude credential pars
 check(parsedCredentials.refreshToken == "fixture-refresh", "Claude credential parser should read refresh token")
 check(parsedCredentials.expiresAtMilliseconds == 1_900_000_000_000, "Claude credential parser should read expiry")
 
+let chromeProfilesFixture = Data(#"""
+{
+  "profile": {
+    "info_cache": {
+      "Profile 2": {"name":"Private","user_name":"hello@example.invalid"},
+      "Default": {"name":"Work","user_name":"person@company.invalid"}
+    }
+  }
+}
+"""#.utf8)
+let chromeProfiles = ClaudeChromeProfileReader.parseProfiles(chromeProfilesFixture)
+check(chromeProfiles.map(\.directoryName) == ["Default", "Profile 2"], "guided login should keep Chrome's Default profile first")
+check(chromeProfiles.first?.displayName == "Work", "guided login should read Chrome profile display names")
+check(chromeProfiles.first?.accountEmail == "person@company.invalid", "guided login should read the local Chrome profile account label")
+
+let guidedHome = URL(fileURLWithPath: "/tmp/ai-usage-guided-home")
+let guidedDirectory = ClaudeGuidedLoginService.configDirectory(
+    homeDirectory: guidedHome,
+    connectionID: "claude/work 1"
+)
+check(
+    guidedDirectory.path == "/tmp/ai-usage-guided-home/.ai-usage/claude-accounts/claude-work-1",
+    "guided login should create a stable, sanitized config directory per connection"
+)
+let guidedStatus = ClaudeGuidedLoginService.parseAuthStatus(#"{"loggedIn":true,"authMethod":"claude.ai","account":{"email":"person@company.invalid"}}"#)
+check(guidedStatus?.loggedIn == true, "guided login should parse a successful Claude auth status")
+check(guidedStatus?.accountEmail == "person@company.invalid", "guided login should find a nested account email when Claude reports one")
+check(
+    ClaudeGuidedLoginService.chromeBrowserHelperScript.contains("AI_USAGE_CHROME_PROFILE"),
+    "guided login browser helper should route OAuth through the selected Chrome profile"
+)
+do {
+    _ = try ClaudeGuidedLoginService(homeDirectory: guidedHome).login(
+        connectionID: "claude1",
+        email: "not-an-email",
+        usesSSO: false,
+        chromeProfile: ClaudeChromeProfile(directoryName: "Default", displayName: "Work"),
+        claudeExecutable: "/bin/false"
+    )
+    check(false, "guided login should reject an invalid email before launching Claude")
+} catch ClaudeGuidedLoginError.invalidEmail {
+    // Expected.
+}
+
+let ptyCancellationToken = PTYCancellationToken()
+let ptyCancellationCheck = Task.detached { () -> Bool in
+    do {
+        _ = try InteractivePTYRunner().run(
+            executable: "/bin/sh",
+            arguments: ["-c", "sleep 5"],
+            environment: [:],
+            timeout: 10,
+            autoResponses: [:],
+            cancellationToken: ptyCancellationToken
+        )
+        return false
+    } catch PTYRunnerError.cancelled {
+        return true
+    } catch {
+        return false
+    }
+}
+try await Task.sleep(for: .milliseconds(100))
+ptyCancellationToken.cancel()
+let ptyCancellationSucceeded = await ptyCancellationCheck.value
+check(ptyCancellationSucceeded, "guided login should be cancellable while waiting for browser authentication")
+
 let profile = ClaudeProfile(
     id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
     name: "Example Profile",
@@ -364,12 +431,14 @@ let profileSource = SourceConfig(
     mode: .claudeOAuth,
     command: nil,
     quota: .session,
-    claudeProfile: profile
+    claudeProfile: profile,
+    claudeCLIAccountLabel: "cli-account@example.invalid"
 )
 let profileConfig = AppConfig(refreshIntervalSeconds: 30, sources: [profileSource])
 let encodedProfileConfig = try JSONEncoder().encode(profileConfig)
 let encodedProfileText = String(decoding: encodedProfileConfig, as: UTF8.self)
 check(encodedProfileText.contains("Example Profile"), "profile metadata should persist in config")
+check(encodedProfileText.contains("cli-account@example.invalid"), "guided CLI account labels should persist in config")
 check(!encodedProfileText.contains("fixture-access"), "OAuth access token must never persist in config")
 check(!encodedProfileText.contains("fixture-refresh"), "OAuth refresh token must never persist in config")
 

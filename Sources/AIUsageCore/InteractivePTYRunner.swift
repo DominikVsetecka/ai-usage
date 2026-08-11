@@ -10,13 +10,34 @@ public enum PTYRunnerError: LocalizedError, Sendable {
     case missingExecutable(String)
     case launchFailed(String)
     case timedOut
+    case cancelled
 
     public var errorDescription: String? {
         switch self {
         case .missingExecutable(let path): "Missing executable: \(path)"
         case .launchFailed(let message): "Could not launch CLI: \(message)"
         case .timedOut: "CLI usage probe timed out"
+        case .cancelled: "CLI operation was cancelled"
         }
+    }
+}
+
+public final class PTYCancellationToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    public init() {}
+
+    public func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    fileprivate var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
     }
 }
 
@@ -28,7 +49,9 @@ public struct InteractivePTYRunner: Sendable {
         arguments: [String],
         environment: [String: String],
         timeout: TimeInterval,
-        autoResponses: [String: String]
+        autoResponses: [String: String],
+        removedEnvironmentKeys: Set<String> = ["CLAUDE_CODE_OAUTH_TOKEN"],
+        cancellationToken: PTYCancellationToken? = nil
     ) throws -> PTYCommandResult {
         let executablePath = NSString(string: executable).expandingTildeInPath
         guard FileManager.default.isExecutableFile(atPath: executablePath) else {
@@ -55,7 +78,9 @@ public struct InteractivePTYRunner: Sendable {
         process.standardError = secondary
 
         var processEnvironment = Self.processEnvironment(merging: environment)
-        processEnvironment.removeValue(forKey: "CLAUDE_CODE_OAUTH_TOKEN")
+        for key in removedEnvironmentKeys {
+            processEnvironment.removeValue(forKey: key)
+        }
         processEnvironment["TERM"] = "xterm-256color"
         processEnvironment["COLORTERM"] = "truecolor"
         process.environment = processEnvironment
@@ -72,8 +97,13 @@ public struct InteractivePTYRunner: Sendable {
         var responded = Set<String>()
         var lastMeaningfulData = Date()
         let deadline = Date().addingTimeInterval(timeout)
+        var wasCancelled = false
 
         while Date() < deadline {
+            if cancellationToken?.isCancelled == true {
+                wasCancelled = true
+                break
+            }
             let before = output.count
             Self.readAvailable(fd: primaryFD, into: &output)
             if output.count > before {
@@ -118,6 +148,9 @@ public struct InteractivePTYRunner: Sendable {
         try? primary.close()
         try? secondary.close()
 
+        if wasCancelled {
+            throw PTYRunnerError.cancelled
+        }
         if didTimeOut && output.isEmpty {
             throw PTYRunnerError.timedOut
         }

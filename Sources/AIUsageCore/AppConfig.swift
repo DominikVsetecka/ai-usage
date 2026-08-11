@@ -334,6 +334,9 @@ public struct SourceConfig: Codable, Equatable, Sendable {
     public var iconName: String?
     public var iconData: String?     // Base64-encoded image (SVG/PNG); takes priority over iconName
     public var claudeProfile: ClaudeProfile?
+    /// Non-secret account label recorded by the guided isolated Claude CLI
+    /// login. OAuth profiles keep their label in `claudeProfile` instead.
+    public var claudeCLIAccountLabel: String?
     public var showFiveHourInPopover: Bool?
     public var showOneWeekInPopover: Bool?
     /// Governs any extra model-scoped windows this source reports (e.g. a
@@ -356,6 +359,7 @@ public struct SourceConfig: Codable, Equatable, Sendable {
         iconName: String? = nil,
         iconData: String? = nil,
         claudeProfile: ClaudeProfile? = nil,
+        claudeCLIAccountLabel: String? = nil,
         showFiveHourInPopover: Bool? = nil,
         showOneWeekInPopover: Bool? = nil,
         showExtraInPopover: Bool? = nil,
@@ -372,6 +376,7 @@ public struct SourceConfig: Codable, Equatable, Sendable {
         self.iconName = iconName
         self.iconData = iconData
         self.claudeProfile = claudeProfile
+        self.claudeCLIAccountLabel = claudeCLIAccountLabel
         self.showFiveHourInPopover = showFiveHourInPopover
         self.showOneWeekInPopover = showOneWeekInPopover
         self.showExtraInPopover = showExtraInPopover

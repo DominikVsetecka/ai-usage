@@ -2,6 +2,19 @@
 
 All notable changes to AI Usage are documented in this file.
 
+## 1.9 — 2026-08-12
+
+### Added
+
+- Guided multi-account login in Settings → Connections. Each Claude connection can now create its own isolated `CLAUDE_CONFIG_DIR`, choose a local Chrome profile, pre-fill the account email, optionally force company SSO, and run Anthropic's official `claude auth login` without logging another account out.
+- Chrome-profile discovery reads only Chrome's non-secret local profile index (profile name and account label). The OAuth URL is routed to the selected profile by a tiny local browser launcher; AI Usage never reads cookies, browser sessions, passwords or page contents.
+- Successful login is verified with `claude auth status --json`, then the connection is automatically enabled and switched to its dedicated Claude CLI profile. The account label and isolated config path persist in AI Usage settings.
+- The waiting login can be stopped safely from the wizard; the child CLI process is terminated without touching any other Claude login.
+
+### Changed
+
+- The old global-Keychain import remains available as an advanced Secure-profile workflow. The Connections UI now recommends the guided isolated login for two accounts instead of asking users to log the global Claude Code account out and back in.
+
 ## 1.8 — 2026-08-12
 
 ### Fixed

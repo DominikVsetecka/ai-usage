@@ -79,6 +79,7 @@ If you do copy the built binary to another Mac (e.g. via a network share), that 
 - **Local history** — usage logged to `~/.ai-usage/history/YYYY-MM-DD.jsonl` on ≥1% change or every 30 min; 30-day retention
 - **History tab** — line chart with 1-day / 7-day / 30-day picker, per-series toggle chips to declutter multi-connection charts, and a "Show in Finder" button
 - **Secure Claude profiles** — OAuth credentials imported into a separate app-owned Keychain entry; never touches Claude Code's own login
+- **Guided multi-account login** — connect each Claude source through its own official Claude Code login and Chrome profile, without logging another account out
 - **Custom icons** — pick any SVG or PNG per provider via file picker; stored as Base64 in `config.json`; no brand logos are bundled
 - **Configurable refresh** — 15 s / 30 s / 1 min / 2 min / 5 min
 
@@ -92,7 +93,21 @@ History is stored at `~/.ai-usage/history/` and is not committed to git.
 
 ### Two Claude accounts
 
-**Recommended: Secure profile mode**
+**Recommended: Guided separate login**
+
+This is the reliable path when both Claude accounts should stay signed in at the same time.
+
+1. Open Settings → Connections and choose the Claude connection you want to set up.
+2. Click **Set Up Separate Claude Account…**.
+3. Select the Chrome profile that is already signed into that account, confirm the email, and enable company SSO when required.
+4. Click **Open Browser & Sign In** and finish Anthropic's official Claude Code login in Chrome.
+5. Once AI Usage reports the connected account, close the wizard and choose **Save & Refresh**.
+
+AI Usage creates a dedicated directory under `~/.ai-usage/claude-accounts/` and assigns it only to that connection. It never reads Chrome cookies or passwords, and it does not alter the Claude login used by another connection, Terminal, VS Code or Zed.
+
+Guided accounts currently use the Claude CLI `/usage` connection. Extra model-scoped limits reported only by the direct OAuth API remain available through the advanced Secure-profile mode below.
+
+**Advanced: Secure profile mode**
 
 Each account gets its own isolated Keychain entry. After setup the `claude` CLI is no longer needed for those sources.
 
