@@ -2,6 +2,15 @@
 
 All notable changes to AI Usage are documented in this file.
 
+## 1.8 — 2026-08-12
+
+### Fixed
+
+- Claude Code account detection now uses one targeted macOS Security-framework lookup instead of launching `/usr/bin/security` with a hard three-second timeout. A slow Keychain unlock prompt can no longer be misreported as "not signed in", and the Settings row now shows the actual lookup error when detection fails.
+- Secure-profile credentials are retained in memory per connection after their first successful app-owned Keychain read. A transient later Keychain read failure can therefore no longer make one of two configured Claude accounts randomly disappear while the app is running.
+- A rotated Claude OAuth token is no longer discarded when its immediate Keychain write fails transiently. The fresh credential stays active in memory, usage polling continues, and persistence is retried on the next cycle instead of repeatedly attempting refresh with stale credentials.
+- Token-refresh and Keychain load/save failures now include a safe error category and code in `~/.ai-usage/fetch-log.txt`, closing a diagnostic blind spot where a profile could repeat "token refresh" for many cycles without ever recording why it failed.
+
 ## 1.7 — 2026-08-06
 
 ### Added

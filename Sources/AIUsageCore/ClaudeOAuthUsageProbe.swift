@@ -62,6 +62,16 @@ public actor ClaudeOAuthUsageService {
     /// self-inflicted 429s (and the multi-minute lock they trigger).
     private let minForceFetchInterval: TimeInterval
     private var cache: [UUID: CacheEntry] = [:]
+    /// Credentials are loaded from the app-owned Keychain once per profile and
+    /// retained only in memory for the lifetime of the process. This prevents a
+    /// transient Keychain read failure from making one of two configured
+    /// accounts randomly disappear on a later polling cycle.
+    private var credentialsCache: [UUID: ClaudeOAuthCredentials] = [:]
+    /// A refreshed token remains usable even if persisting its rotation hits a
+    /// transient Keychain error. Keep serving it from memory and retry the
+    /// Keychain write on the next cycle instead of falling back to the stale
+    /// refresh token and entering a refresh loop.
+    private var credentialsAwaitingPersistence: Set<UUID> = []
     private var retryAfter: [UUID: Date] = [:]
     /// Consecutive 429s per profile, driving an exponential backoff so a
     /// persistent rate-limit isn't retried every interval (which would keep
@@ -150,13 +160,33 @@ public actor ClaudeOAuthUsageService {
             throw ClaudeOAuthUsageError.rateLimited(retryDate)
         }
 
-        guard var credentials = try store.load(profileID: profileID) else {
-            logEvent("usage \(tag) \(mode) -> ERROR: no credentials")
-            throw ClaudeOAuthUsageError.authenticationRequired
+        var credentials: ClaudeOAuthCredentials
+        if let cachedCredentials = credentialsCache[profileID] {
+            credentials = cachedCredentials
+            retryCredentialPersistenceIfNeeded(credentials, profileID: profileID, tag: tag)
+        } else {
+            let storedCredentials: ClaudeOAuthCredentials?
+            do {
+                storedCredentials = try store.load(profileID: profileID)
+            } catch {
+                logEvent("usage \(tag) \(mode) -> Keychain load ERROR: \(Self.diagnosticDescription(error))")
+                throw error
+            }
+            guard let storedCredentials else {
+                logEvent("usage \(tag) \(mode) -> ERROR: no credentials")
+                throw ClaudeOAuthUsageError.authenticationRequired
+            }
+            credentials = storedCredentials
+            credentialsCache[profileID] = storedCredentials
         }
         if credentials.needsRefresh(), credentials.refreshToken != nil {
             logEvent("usage \(tag) \(mode) -> token refresh (near expiry)")
-            credentials = try await refresh(credentials, profileID: profileID)
+            do {
+                credentials = try await refresh(credentials, profileID: profileID)
+            } catch {
+                logEvent("usage \(tag) \(mode) -> token refresh ERROR: \(Self.diagnosticDescription(error))")
+                throw error
+            }
         }
 
         logEvent("usage \(tag) \(mode) -> NETWORK GET (since last real fetch: \(sinceLast.map { "\($0)s" } ?? "n/a"))")
@@ -223,6 +253,8 @@ public actor ClaudeOAuthUsageService {
 
     public func clearCache(profileID: UUID) {
         cache[profileID] = nil
+        credentialsCache[profileID] = nil
+        credentialsAwaitingPersistence.remove(profileID)
         retryAfter[profileID] = nil
         rateLimitStreak[profileID] = nil
     }
@@ -338,8 +370,39 @@ public actor ClaudeOAuthUsageService {
         if let expiresIn = payload.expiresIn {
             updated.expiresAtMilliseconds = (Date().timeIntervalSince1970 + expiresIn) * 1_000
         }
-        try store.save(updated, profileID: profileID)
+        // Cache first: if the Keychain is temporarily unavailable after the
+        // server rotates the refresh token, throwing the new credential away
+        // would leave only the now-stale token and can strand this profile in
+        // an endless refresh loop. Persistence is retried on every later fetch.
+        credentialsCache[profileID] = updated
+        do {
+            try store.save(updated, profileID: profileID)
+            credentialsAwaitingPersistence.remove(profileID)
+        } catch {
+            credentialsAwaitingPersistence.insert(profileID)
+            logEvent("usage \(Self.shortID(profileID)) token refresh -> Keychain save deferred: \(Self.diagnosticDescription(error))")
+        }
         return updated
+    }
+
+    private func retryCredentialPersistenceIfNeeded(
+        _ credentials: ClaudeOAuthCredentials,
+        profileID: UUID,
+        tag: String
+    ) {
+        guard credentialsAwaitingPersistence.contains(profileID) else { return }
+        do {
+            try store.save(credentials, profileID: profileID)
+            credentialsAwaitingPersistence.remove(profileID)
+            logEvent("usage \(tag) -> deferred Keychain save succeeded")
+        } catch {
+            logEvent("usage \(tag) -> deferred Keychain save still failing: \(Self.diagnosticDescription(error))")
+        }
+    }
+
+    private static func diagnosticDescription(_ error: Error) -> String {
+        let nsError = error as NSError
+        return "\(error.localizedDescription) [\(nsError.domain) \(nsError.code)]"
     }
 
     private static func makeWindow(_ payload: UsageWindowPayload) -> ProviderUsageWindow? {

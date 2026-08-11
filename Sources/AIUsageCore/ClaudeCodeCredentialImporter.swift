@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 public struct ClaudeCodeCredentialImporter: Sendable {
     private let store: any ClaudeCredentialStoring
@@ -18,8 +19,8 @@ public struct ClaudeCodeCredentialImporter: Sendable {
     /// signed in with at that moment — so Settings shows this up front instead
     /// of letting the user find out afterwards that both connections ended up
     /// on the same account.
-    public func detectCurrentAccount() -> ClaudeCodeAccountPreview? {
-        guard let imported = try? readCurrentCredentials() else { return nil }
+    public func detectCurrentAccount() throws -> ClaudeCodeAccountPreview {
+        let imported = try readCurrentCredentials()
         let metadata = readAccountMetadata()
         return ClaudeCodeAccountPreview(
             label: metadata.label,
@@ -68,10 +69,19 @@ public struct ClaudeCodeCredentialImporter: Sendable {
     }
 
     private func readCurrentCredentials() throws -> (credentials: ClaudeOAuthCredentials, source: String) {
+        var keychainError: Error?
+        var foundInvalidCredentials = false
         for service in claudeCodeKeychainServices() {
-            if let data = readKeychainData(service: service),
-               let credentials = try? Self.parseCredentials(data) {
-                return (credentials, "Claude Code Keychain")
+            do {
+                if let data = try readKeychainData(service: service) {
+                    do {
+                        return (try Self.parseCredentials(data), "Claude Code Keychain")
+                    } catch {
+                        foundInvalidCredentials = true
+                    }
+                }
+            } catch {
+                keychainError = error
             }
         }
 
@@ -81,12 +91,17 @@ public struct ClaudeCodeCredentialImporter: Sendable {
         ]
 
         for url in credentialURLs where FileManager.default.fileExists(atPath: url.path) {
-            if let data = try? Data(contentsOf: url),
-               let credentials = try? Self.parseCredentials(data) {
-                return (credentials, "Claude Code credentials file")
+            if let data = try? Data(contentsOf: url) {
+                do {
+                    return (try Self.parseCredentials(data), "Claude Code credentials file")
+                } catch {
+                    foundInvalidCredentials = true
+                }
             }
         }
 
+        if let keychainError { throw keychainError }
+        if foundInvalidCredentials { throw ClaudeCredentialImportError.invalidCredentials }
         throw ClaudeCredentialImportError.notFound
     }
 
@@ -102,29 +117,28 @@ public struct ClaudeCodeCredentialImporter: Sendable {
         return services
     }
 
-    private func readKeychainData(service: String) -> Data? {
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-s", service, "-w"]
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-
-        let finished = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in finished.signal() }
-        do {
-            try process.run()
-        } catch {
-            return nil
+    private func readKeychainData(service: String) throws -> Data? {
+        // Use the Security framework directly. Spawning `/usr/bin/security`
+        // made account detection depend on a child process, its own Keychain
+        // ACL identity and a hard three-second timeout. A slow unlock prompt
+        // therefore looked exactly like "not signed in" even when Claude Code
+        // had a valid credential. This is still a targeted lookup for the one
+        // known Claude Code service; it never enumerates the user's Keychain.
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw ClaudeCredentialImportError.keychainAccessFailed(status)
         }
-
-        guard finished.wait(timeout: .now() + 3) == .success else {
-            process.terminate()
-            return nil
+        guard let data = item as? Data, !data.isEmpty else {
+            throw ClaudeCredentialImportError.invalidCredentials
         }
-        guard process.terminationStatus == 0 else { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        guard !data.isEmpty else { return nil }
         return data
     }
 
@@ -144,6 +158,7 @@ public struct ClaudeCodeCredentialImporter: Sendable {
 public enum ClaudeCredentialImportError: LocalizedError {
     case notFound
     case invalidCredentials
+    case keychainAccessFailed(OSStatus)
 
     public var errorDescription: String? {
         switch self {
@@ -151,6 +166,12 @@ public enum ClaudeCredentialImportError: LocalizedError {
             "No authenticated Claude Code account was found. Log in with Claude Code, then retry."
         case .invalidCredentials:
             "Claude Code credentials could not be read"
+        case .keychainAccessFailed(let status):
+            "Claude Code Keychain access failed (\(Self.statusMessage(status)), OSStatus \(status))"
         }
+    }
+
+    private static func statusMessage(_ status: OSStatus) -> String {
+        SecCopyErrorMessageString(status, nil) as String? ?? "unknown Keychain error"
     }
 }

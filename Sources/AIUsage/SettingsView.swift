@@ -5,6 +5,11 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct SettingsView: View {
+    private enum ClaudeAccountDetectionResult: Sendable {
+        case success(ClaudeCodeAccountPreview)
+        case failure(String)
+    }
+
     @State private var draft: AppConfig
     @State private var latestSnapshots: [UsageSnapshot]
     let historyStore: UsageHistoryStore
@@ -18,9 +23,10 @@ struct SettingsView: View {
 
     @State private var selectedPanelID: String = SettingsPanel.general.id
     /// Which account an import would pick up right now. Detected once for the
-    /// whole Connections panel rather than per section, so opening it spawns a
-    /// single `security` lookup instead of one per Claude connection.
+    /// whole Connections panel rather than per section, so opening it performs
+    /// one targeted Keychain lookup instead of one per Claude connection.
     @State private var detectedClaudeAccount: ClaudeCodeAccountPreview?
+    @State private var claudeAccountDetectionError: String?
     @State private var isDetectingClaudeAccount = false
     @State private var didDetectClaudeAccount = false
 
@@ -315,6 +321,7 @@ struct SettingsView: View {
                     detectedAccount: detectedClaudeAccount,
                     isDetectingAccount: isDetectingClaudeAccount,
                     didDetectAccount: didDetectClaudeAccount,
+                    accountDetectionError: claudeAccountDetectionError,
                     accountsUsedElsewhere: accountsUsedElsewhere(excluding: index),
                     onRedetectAccount: { detectClaudeCodeAccount() },
                     onCredentialsChanged: onCredentialsChanged
@@ -348,10 +355,23 @@ struct SettingsView: View {
     private func detectClaudeCodeAccount() {
         isDetectingClaudeAccount = true
         Task {
-            let preview = await Task.detached(priority: .userInitiated) {
-                ClaudeCodeCredentialImporter().detectCurrentAccount()
+            let result = await Task.detached(priority: .userInitiated) {
+                do {
+                    return ClaudeAccountDetectionResult.success(
+                        try ClaudeCodeCredentialImporter().detectCurrentAccount()
+                    )
+                } catch {
+                    return ClaudeAccountDetectionResult.failure(error.localizedDescription)
+                }
             }.value
-            detectedClaudeAccount = preview
+            switch result {
+            case .success(let preview):
+                detectedClaudeAccount = preview
+                claudeAccountDetectionError = nil
+            case .failure(let message):
+                detectedClaudeAccount = nil
+                claudeAccountDetectionError = message
+            }
             isDetectingClaudeAccount = false
             didDetectClaudeAccount = true
         }
@@ -643,6 +663,7 @@ private struct ProviderSettingsSection: View {
     let detectedAccount: ClaudeCodeAccountPreview?
     let isDetectingAccount: Bool
     let didDetectAccount: Bool
+    let accountDetectionError: String?
     let accountsUsedElsewhere: [String: String]
     let onRedetectAccount: () -> Void
     let onCredentialsChanged: (UUID) -> Void
@@ -918,8 +939,9 @@ private struct ProviderSettingsSection: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 } else if didDetectAccount {
-                    Text("No signed-in Claude Code account found")
+                    Text(accountDetectionError ?? "No signed-in Claude Code account found")
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 } else {
                     Text("—").foregroundStyle(.secondary)
                 }
@@ -1645,7 +1667,7 @@ private struct InfoView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Text("Version 1.7 · 2026-08-06")
+            Text("Version 1.8 · 2026-08-12")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

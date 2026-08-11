@@ -4,16 +4,43 @@ import Foundation
 final class MemoryClaudeCredentialStore: ClaudeCredentialStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var values: [UUID: ClaudeOAuthCredentials] = [:]
+    private var loadCalls = 0
+    private var saveCalls = 0
+    private var saveFailuresRemaining = 0
+
+    var loadCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return loadCalls
+    }
+
+    var saveCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return saveCalls
+    }
+
+    func failNextSaves(_ count: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        saveFailuresRemaining = count
+    }
 
     func load(profileID: UUID) throws -> ClaudeOAuthCredentials? {
         lock.lock()
         defer { lock.unlock() }
+        loadCalls += 1
         return values[profileID]
     }
 
     func save(_ credentials: ClaudeOAuthCredentials, profileID: UUID) throws {
         lock.lock()
         defer { lock.unlock() }
+        saveCalls += 1
+        if saveFailuresRemaining > 0 {
+            saveFailuresRemaining -= 1
+            throw FixtureCredentialStoreError.saveFailed
+        }
         values[profileID] = credentials
     }
 
@@ -22,6 +49,10 @@ final class MemoryClaudeCredentialStore: ClaudeCredentialStoring, @unchecked Sen
         defer { lock.unlock() }
         values[profileID] = nil
     }
+}
+
+enum FixtureCredentialStoreError: Error {
+    case saveFailed
 }
 
 actor QueueHTTPTransport: HTTPTransporting {
@@ -379,6 +410,55 @@ let forcedUsage = try await cacheService.fetch(profileID: cacheProfileID, force:
 check(forcedUsage.session?.percentUsed == 44, "forced Claude OAuth refresh should bypass cache and read fresh usage")
 let forcedRequests = await cacheTransport.requests
 check(forcedRequests.count == 2, "forced Claude OAuth refresh should make a new HTTP call")
+check(cacheStore.loadCount == 1, "Claude OAuth should retain a profile's credentials in memory instead of reopening Keychain every poll")
+
+// Token rotation must survive a transient Keychain write failure. The fresh
+// access/refresh pair remains in memory, usage continues, and persistence is
+// retried on the next cycle. Discarding the rotated pair here can strand an
+// account on the old refresh token and was observed as a repeated refresh loop.
+let deferredProfileID = UUID()
+let deferredStore = MemoryClaudeCredentialStore()
+try deferredStore.save(
+    ClaudeOAuthCredentials(
+        accessToken: "expired-access",
+        refreshToken: "original-refresh",
+        expiresAtMilliseconds: (Date().timeIntervalSince1970 - 60) * 1_000
+    ),
+    profileID: deferredProfileID
+)
+deferredStore.failNextSaves(1)
+let refreshFixture = HTTPResult(
+    data: Data(#"{"access_token":"rotated-access","refresh_token":"rotated-refresh","expires_in":3600}"#.utf8),
+    statusCode: 200
+)
+let deferredTransport = QueueHTTPTransport(responses: [
+    refreshFixture,
+    HTTPResult(data: oauthUsageFixture, statusCode: 200),
+    HTTPResult(data: oauthUsageUpdatedFixture, statusCode: 200)
+])
+let deferredService = ClaudeOAuthUsageService(
+    store: deferredStore,
+    transport: deferredTransport,
+    cacheTTL: 0,
+    minForceFetchInterval: 0
+)
+let deferredFirst = try await deferredService.fetch(profileID: deferredProfileID)
+check(deferredFirst.session?.percentUsed == 22, "usage should continue when persisting a rotated token fails once")
+let deferredSecond = try await deferredService.fetch(profileID: deferredProfileID, force: true)
+check(deferredSecond.session?.percentUsed == 44, "the next cycle should keep using the rotated in-memory credential")
+check(deferredStore.loadCount == 1, "a deferred Keychain save must not force a reload of the stale credential")
+check(deferredStore.saveCount == 3, "the rotated credential should be retried once after a transient Keychain save failure")
+let persistedDeferredCredentials = try deferredStore.load(profileID: deferredProfileID)
+check(persistedDeferredCredentials?.accessToken == "rotated-access", "the retry should persist the rotated access token")
+check(persistedDeferredCredentials?.refreshToken == "rotated-refresh", "the retry should persist the rotated refresh token")
+let deferredRequests = await deferredTransport.requests
+check(deferredRequests.count == 3, "a deferred Keychain save retry must not trigger another token refresh")
+check(
+    deferredRequests.filter { $0.url?.path == "/api/oauth/usage" }.allSatisfy {
+        $0.value(forHTTPHeaderField: "Authorization") == "Bearer rotated-access"
+    },
+    "usage requests should use the rotated in-memory access token"
+)
 
 // Credential change: re-importing an account into an existing profile keeps the
 // profile ID, so the cache entry left over from the *previous* account would
@@ -414,6 +494,7 @@ let afterReimport = try await reimportService.fetch(profileID: reimportProfileID
 check(afterReimport.session?.percentUsed == 44, "clearing a profile's cache must force a fresh read for the newly imported account")
 let reimportRequests = await reimportTransport.requests
 check(reimportRequests.count == 2, "clearing a profile's cache should produce a second HTTP call even inside the TTL")
+check(reimportStore.loadCount == 2, "clearing a profile after re-import should also reload its Keychain credential")
 
 // Force throttle: rapid manual refreshes must not each hit the network. A
 // client-side floor (minForceFetchInterval) serves cache instead — this is
