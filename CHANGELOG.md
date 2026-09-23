@@ -2,6 +2,31 @@
 
 All notable changes to AI Usage are documented in this file.
 
+## 1.13 — 2026-09-24
+
+### Changed
+
+- The sidebar toggle is now a compact control directly beside “Usage over time”; other Settings panels keep a compact toggle row at the top.
+
+## 1.12 — 2026-09-24
+
+### Fixed
+
+- The Settings sidebar toggle is now a persistent titlebar control, so it remains visible and can reopen the sidebar after it is hidden or dragged away.
+
+## 1.11 — 2026-09-24
+
+### Fixed
+
+- The sidebar toggle remains available after hiding the sidebar, so the Settings menu can always be shown again.
+
+## 1.10 — 2026-09-24
+
+### Fixed
+
+- The History panel keeps its range selector visible at small window heights by allowing the chart and recent-entries table to scroll below the controls.
+- The Settings sidebar toggle stays in the navigation area instead of moving to the far trailing edge when the sidebar is hidden.
+
 ## 1.9 — 2026-08-12
 
 ### Added

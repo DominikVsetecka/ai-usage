@@ -4,6 +4,10 @@ import Charts
 import SwiftUI
 import UniformTypeIdentifiers
 
+extension Notification.Name {
+    static let aiUsageSettingsSidebarToggle = Notification.Name("aiUsageSettingsSidebarToggle")
+}
+
 struct SettingsView: View {
     private enum ClaudeAccountDetectionResult: Sendable {
         case success(ClaudeCodeAccountPreview)
@@ -22,6 +26,7 @@ struct SettingsView: View {
     let onCredentialsChanged: (UUID) -> Void
 
     @State private var selectedPanelID: String = SettingsPanel.general.id
+    @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
     /// Which account an import would pick up right now. Detected once for the
     /// whole Connections panel rather than per section, so opening it performs
     /// one targeted Keychain lookup instead of one per Claude connection.
@@ -85,7 +90,17 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        settingsSplitView
+            .onReceive(NotificationCenter.default.publisher(for: .aiUsageSettingsSidebarToggle)) { _ in
+                withAnimation {
+                    sidebarVisibility = sidebarVisibility == .detailOnly ? .all : .detailOnly
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var settingsSplitView: some View {
+        let splitView = NavigationSplitView(columnVisibility: $sidebarVisibility) {
             List(SettingsPanel.allCases, selection: sidebarSelection) { panel in
                 Label(panel.title, systemImage: panel.icon)
                     .tag(panel.id)
@@ -93,12 +108,30 @@ struct SettingsView: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
         } detail: {
             VStack(spacing: 0) {
+                if currentPanel != .history {
+                    sidebarToggleBar
+                }
                 detailContent
                 Divider()
                 footer
             }
         }
-        .frame(minWidth: 820, minHeight: 640)
+
+        // NavigationSplitView adds its own sidebar toggle. On macOS that
+        // default item can move from the navigation area to the far trailing
+        // edge when the sidebar is hidden. Remove it where supported and use a
+        // stable, explicitly bound toggle instead.
+        if #available(macOS 14.0, *) {
+            splitView
+                .toolbar(removing: .sidebarToggle)
+                .frame(minWidth: 820, minHeight: 640)
+        } else {
+            // toolbar(removing:) was introduced in macOS 14. Keep the
+            // system-provided control on macOS 13 rather than showing two
+            // toggles there.
+            splitView
+                .frame(minWidth: 820, minHeight: 640)
+        }
     }
 
     @ViewBuilder private var detailContent: some View {
@@ -124,6 +157,15 @@ struct SettingsView: View {
             .keyboardShortcut(.defaultAction)
         }
         .padding(16)
+    }
+
+    private var sidebarToggleBar: some View {
+        HStack {
+            SettingsSidebarToggleButton()
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
     }
 
     private var generalPanel: some View {
@@ -1652,6 +1694,21 @@ private struct SeriesToggleRow: View {
     }
 }
 
+private struct SettingsSidebarToggleButton: View {
+    var body: some View {
+        Button {
+            NotificationCenter.default.post(name: .aiUsageSettingsSidebarToggle, object: nil)
+        } label: {
+            Image(systemName: "sidebar.left")
+                .imageScale(.small)
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .frame(width: 20, height: 20)
+        .help("Show or hide sidebar")
+    }
+}
+
 // MARK: - History tab
 
 private struct HistoryView: View {
@@ -1792,51 +1849,7 @@ private struct HistoryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Usage over time")
-                    .font(.headline)
-                Spacer()
-                Picker("", selection: $selectedRange) {
-                    ForEach(HistoryRange.allCases) { range in
-                        Text(range.label).tag(range)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 280)
-                HStack(spacing: 6) {
-                    Button {
-                        xZoomDomain = nil
-                    } label: {
-                        Image(systemName: "arrow.left.and.right")
-                    }
-                    .disabled(xZoomDomain == nil)
-                    .help("Show full time range")
-
-                    Button {
-                        zoomLevel = max(0, zoomLevel - 1)
-                    } label: {
-                        Image(systemName: "minus.magnifyingglass")
-                    }
-                    .disabled(zoomLevel == 0)
-                    .help("Zoom statistics out")
-
-                    Button {
-                        zoomLevel = min(2, zoomLevel + 1)
-                    } label: {
-                        Image(systemName: "plus.magnifyingglass")
-                    }
-                    .disabled(zoomLevel == 2 || chartPoints.isEmpty)
-                    .help("Zoom statistics in")
-                }
-                .buttonStyle(.borderless)
-                Button {
-                    NSWorkspace.shared.open(historyStore.directory)
-                } label: {
-                    Image(systemName: "folder")
-                }
-                .help("Show history folder in Finder")
-            }
+            historyHeader
 
             if !allSeriesNames.isEmpty {
                 SeriesToggleRow(
@@ -1846,114 +1859,13 @@ private struct HistoryView: View {
                 )
             }
 
-            if isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, minHeight: 200)
-            } else if chartPoints.isEmpty {
-                VStack(spacing: 10) {
-                    Image(systemName: "chart.line.uptrend.xyaxis")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.secondary)
-                    Text("No history yet")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                    Text("Usage is recorded on ≥1% change or every 30 minutes.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, minHeight: 200)
-            } else {
-                Chart(chartPoints) { pt in
-                    LineMark(
-                        x: .value("Time", pt.ts),
-                        y: .value("%", pt.pct)
-                    )
-                    .foregroundStyle(by: .value("Series", pt.series))
-                    .lineStyle(pt.isWeek
-                        ? StrokeStyle(lineWidth: 1.5, dash: [5, 3])
-                        : StrokeStyle(lineWidth: 2))
-                    .interpolationMethod(.monotone)
-                }
-                .chartForegroundStyleScale(domain: allSeriesNames, range: allSeriesNames.map(color(for:)))
-                .chartXScale(domain: chartXDomain)
-                .chartYScale(domain: chartYDomain)
-                .chartYAxis {
-                    AxisMarks(values: yAxisValues) { value in
-                        AxisGridLine()
-                        AxisValueLabel { Text("\(Int(value.as(Double.self) ?? 0))%").font(.caption2) }
-                    }
-                }
-                .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 6)) {
-                        AxisGridLine()
-                        AxisValueLabel(
-                            format: selectedRange.usesTimeAxis
-                                ? .dateTime.hour().minute()
-                                : .dateTime.day().month()
-                        )
-                    }
-                }
-                .chartLegend(position: .bottom, alignment: .leading, spacing: 12)
-                .chartOverlay { proxy in
-                    GeometryReader { geometry in
-                        let plotArea = geometry[proxy.plotAreaFrame]
-                        ZStack(alignment: .topLeading) {
-                            if let dragStartX, let dragEndX {
-                                let lower = min(dragStartX, dragEndX)
-                                let upper = max(dragStartX, dragEndX)
-                                Rectangle()
-                                    .fill(Color.accentColor.opacity(0.16))
-                                    .overlay {
-                                        Rectangle()
-                                            .stroke(Color.accentColor.opacity(0.45), lineWidth: 1)
-                                    }
-                                    .frame(width: max(1, upper - lower), height: plotArea.height)
-                                    .offset(x: plotArea.minX + lower, y: plotArea.minY)
-                            }
-
-                            Rectangle()
-                                .fill(.clear)
-                                .contentShape(Rectangle())
-                                .frame(width: plotArea.width, height: plotArea.height)
-                                .offset(x: plotArea.minX, y: plotArea.minY)
-                                .gesture(
-                                    DragGesture(minimumDistance: 8)
-                                        .onChanged { value in
-                                            let x = min(max(value.location.x - plotArea.minX, 0), plotArea.width)
-                                            if dragStartX == nil {
-                                                dragStartX = min(max(value.startLocation.x - plotArea.minX, 0), plotArea.width)
-                                            }
-                                            dragEndX = x
-                                        }
-                                        .onEnded { _ in
-                                            defer {
-                                                dragStartX = nil
-                                                dragEndX = nil
-                                            }
-                                            guard let dragStartX, let dragEndX,
-                                                  abs(dragEndX - dragStartX) >= 12 else {
-                                                return
-                                            }
-                                            let lowerX = min(dragStartX, dragEndX)
-                                            let upperX = max(dragStartX, dragEndX)
-                                            guard let start: Date = proxy.value(atX: lowerX),
-                                                  let end: Date = proxy.value(atX: upperX),
-                                                  end.timeIntervalSince(start) >= 60 else {
-                                                return
-                                            }
-                                            xZoomDomain = start...end
-                                        }
-                                )
-                        }
-                    }
-                }
-                .frame(height: 220)
-
-                Divider()
-
-                recentTable
+            // Keep the range controls and series chips pinned at the top. The
+            // chart and the table can now scroll independently when the window
+            // is shorter than their combined natural height.
+            ScrollView(.vertical) {
+                historyContent
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(20)
         .task(id: selectedRange) {
@@ -1962,6 +1874,167 @@ private struct HistoryView: View {
             let domain = selectedRange.domain()
             entries = await historyStore.load(from: domain.lowerBound, to: domain.upperBound)
             isLoading = false
+        }
+    }
+
+    private var historyHeader: some View {
+        HStack {
+            SettingsSidebarToggleButton()
+            Text("Usage over time")
+                .font(.headline)
+            Spacer()
+            Picker("", selection: $selectedRange) {
+                ForEach(HistoryRange.allCases) { range in
+                    Text(range.label).tag(range)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 280)
+            HStack(spacing: 6) {
+                Button {
+                    xZoomDomain = nil
+                } label: {
+                    Image(systemName: "arrow.left.and.right")
+                }
+                .disabled(xZoomDomain == nil)
+                .help("Show full time range")
+
+                Button {
+                    zoomLevel = max(0, zoomLevel - 1)
+                } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                }
+                .disabled(zoomLevel == 0)
+                .help("Zoom statistics out")
+
+                Button {
+                    zoomLevel = min(2, zoomLevel + 1)
+                } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+                .disabled(zoomLevel == 2 || chartPoints.isEmpty)
+                .help("Zoom statistics in")
+            }
+            .buttonStyle(.borderless)
+            Button {
+                NSWorkspace.shared.open(historyStore.directory)
+            } label: {
+                Image(systemName: "folder")
+            }
+            .help("Show history folder in Finder")
+        }
+    }
+
+    @ViewBuilder
+    private var historyContent: some View {
+        if isLoading {
+            ProgressView()
+                .frame(maxWidth: .infinity, minHeight: 200)
+        } else if chartPoints.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.secondary)
+                Text("No history yet")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                Text("Usage is recorded on ≥1% change or every 30 minutes.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity, minHeight: 200)
+        } else {
+            Chart(chartPoints) { pt in
+                LineMark(
+                    x: .value("Time", pt.ts),
+                    y: .value("%", pt.pct)
+                )
+                .foregroundStyle(by: .value("Series", pt.series))
+                .lineStyle(pt.isWeek
+                    ? StrokeStyle(lineWidth: 1.5, dash: [5, 3])
+                    : StrokeStyle(lineWidth: 2))
+                .interpolationMethod(.monotone)
+            }
+            .chartForegroundStyleScale(domain: allSeriesNames, range: allSeriesNames.map(color(for:)))
+            .chartXScale(domain: chartXDomain)
+            .chartYScale(domain: chartYDomain)
+            .chartYAxis {
+                AxisMarks(values: yAxisValues) { value in
+                    AxisGridLine()
+                    AxisValueLabel { Text("\(Int(value.as(Double.self) ?? 0))%").font(.caption2) }
+                }
+            }
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 6)) {
+                    AxisGridLine()
+                    AxisValueLabel(
+                        format: selectedRange.usesTimeAxis
+                            ? .dateTime.hour().minute()
+                            : .dateTime.day().month()
+                    )
+                }
+            }
+            .chartLegend(position: .bottom, alignment: .leading, spacing: 12)
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    let plotArea = geometry[proxy.plotAreaFrame]
+                    ZStack(alignment: .topLeading) {
+                        if let dragStartX, let dragEndX {
+                            let lower = min(dragStartX, dragEndX)
+                            let upper = max(dragStartX, dragEndX)
+                            Rectangle()
+                                .fill(Color.accentColor.opacity(0.16))
+                                .overlay {
+                                    Rectangle()
+                                        .stroke(Color.accentColor.opacity(0.45), lineWidth: 1)
+                                }
+                                .frame(width: max(1, upper - lower), height: plotArea.height)
+                                .offset(x: plotArea.minX + lower, y: plotArea.minY)
+                        }
+
+                        Rectangle()
+                            .fill(.clear)
+                            .contentShape(Rectangle())
+                            .frame(width: plotArea.width, height: plotArea.height)
+                            .offset(x: plotArea.minX, y: plotArea.minY)
+                            .gesture(
+                                DragGesture(minimumDistance: 8)
+                                    .onChanged { value in
+                                        let x = min(max(value.location.x - plotArea.minX, 0), plotArea.width)
+                                        if dragStartX == nil {
+                                            dragStartX = min(max(value.startLocation.x - plotArea.minX, 0), plotArea.width)
+                                        }
+                                        dragEndX = x
+                                    }
+                                    .onEnded { _ in
+                                        defer {
+                                            dragStartX = nil
+                                            dragEndX = nil
+                                        }
+                                        guard let dragStartX, let dragEndX,
+                                              abs(dragEndX - dragStartX) >= 12 else {
+                                            return
+                                        }
+                                        let lowerX = min(dragStartX, dragEndX)
+                                        let upperX = max(dragStartX, dragEndX)
+                                        guard let start: Date = proxy.value(atX: lowerX),
+                                              let end: Date = proxy.value(atX: upperX),
+                                              end.timeIntervalSince(start) >= 60 else {
+                                            return
+                                        }
+                                        xZoomDomain = start...end
+                                    }
+                            )
+                    }
+                }
+            }
+            .frame(height: 220)
+
+            Divider()
+
+            recentTable
         }
     }
 
@@ -2020,7 +2093,7 @@ private struct InfoView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Text("Version 1.9 · 2026-08-12")
+            Text("Version 1.13 · 2026-09-24")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
