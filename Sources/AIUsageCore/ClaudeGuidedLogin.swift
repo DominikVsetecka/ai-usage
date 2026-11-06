@@ -134,7 +134,7 @@ public struct ClaudeGuidedLoginService: Sendable {
         connectionID: String,
         email: String,
         usesSSO: Bool,
-        chromeProfile: ClaudeChromeProfile,
+        chromeProfile: ClaudeChromeProfile?,
         claudeExecutable: String,
         cancellationToken: PTYCancellationToken? = nil,
         outputHandler: (@Sendable (String) -> Void)? = nil
@@ -167,7 +167,13 @@ public struct ClaudeGuidedLoginService: Sendable {
             )
         }
 
-        let browserHelper = try prepareChromeBrowserHelper()
+        // Without a Chrome profile (macOS can block reading Chrome's profile
+        // list) Claude falls back to the default browser.
+        var environment = ["CLAUDE_CONFIG_DIR": configURL.path]
+        if let chromeProfile {
+            environment["BROWSER"] = try prepareChromeBrowserHelper().path
+            environment["AI_USAGE_CHROME_PROFILE"] = chromeProfile.directoryName
+        }
 
         var arguments = ["auth", "login", "--claudeai", "--email", cleanEmail]
         if usesSSO { arguments.append("--sso") }
@@ -177,11 +183,7 @@ public struct ClaudeGuidedLoginService: Sendable {
             result = try runner.run(
                 executable: claudeExecutable,
                 arguments: arguments,
-                environment: [
-                    "CLAUDE_CONFIG_DIR": configURL.path,
-                    "BROWSER": browserHelper.path,
-                    "AI_USAGE_CHROME_PROFILE": chromeProfile.directoryName
-                ],
+                environment: environment,
                 timeout: 10 * 60,
                 autoResponses: [:],
                 removedEnvironmentKeys: Self.conflictingAuthenticationEnvironmentKeys,

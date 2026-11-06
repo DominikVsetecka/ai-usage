@@ -421,6 +421,7 @@ try Data("""
 #!/bin/sh
 if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
   echo login >> "$CLAUDE_CONFIG_DIR/login-calls"
+  echo "${BROWSER:-}" > "$CLAUDE_CONFIG_DIR/login-browser"
   cp "$CLAUDE_CONFIG_DIR/status-after-login.json" "$CLAUDE_CONFIG_DIR/status.json"
   exit 0
 fi
@@ -431,7 +432,11 @@ let fakeClaudeConfig = ClaudeGuidedLoginService.configDirectory(homeDirectory: f
 try FileManager.default.createDirectory(at: fakeClaudeConfig, withIntermediateDirectories: true)
 let workStatus = #"{"loggedIn":true,"email":"work@company.invalid"}"#
 
-func runFakeGuidedLogin(isolatedExpiresIn: TimeInterval?, statusAfterLogin: String) throws -> (ClaudeGuidedLoginResult, Int) {
+func runFakeGuidedLogin(
+    isolatedExpiresIn: TimeInterval?,
+    statusAfterLogin: String,
+    chromeProfile: ClaudeChromeProfile? = ClaudeChromeProfile(directoryName: "Default", displayName: "Work")
+) throws -> (ClaudeGuidedLoginResult, Int) {
     try Data(workStatus.utf8).write(to: fakeClaudeConfig.appendingPathComponent("status.json"))
     try Data(statusAfterLogin.utf8).write(to: fakeClaudeConfig.appendingPathComponent("status-after-login.json"))
     try? FileManager.default.removeItem(at: fakeClaudeConfig.appendingPathComponent("login-calls"))
@@ -447,7 +452,7 @@ func runFakeGuidedLogin(isolatedExpiresIn: TimeInterval?, statusAfterLogin: Stri
         connectionID: "claude1",
         email: "work@company.invalid",
         usesSSO: false,
-        chromeProfile: ClaudeChromeProfile(directoryName: "Default", displayName: "Work"),
+        chromeProfile: chromeProfile,
         claudeExecutable: fakeClaude.path
     )
     let calls = (try? String(contentsOf: fakeClaudeConfig.appendingPathComponent("login-calls"), encoding: .utf8))?
@@ -477,6 +482,16 @@ do {
         "guided login should name the expected and the actually signed-in account"
     )
 }
+func fakeLoginBrowser() -> String {
+    ((try? String(contentsOf: fakeClaudeConfig.appendingPathComponent("login-browser"), encoding: .utf8)) ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+check(fakeLoginBrowser().hasSuffix("open-claude-login-in-chrome"), "guided login should route the browser through the Chrome helper when a profile is selected")
+let defaultBrowserLogin = try runFakeGuidedLogin(isolatedExpiresIn: -3600, statusAfterLogin: workStatus, chromeProfile: nil)
+check(
+    defaultBrowserLogin.1 == 1 && !fakeLoginBrowser().hasSuffix("open-claude-login-in-chrome"),
+    "guided login must still start without readable Chrome profiles and leave the browser choice to the system"
+)
 check(
     ClaudeGuidedLoginService.chromeBrowserHelperScript.contains("open -na \"Google Chrome\""),
     "guided login browser helper must start a new Chrome process so --args reach an already running Chrome"

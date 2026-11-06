@@ -9,6 +9,7 @@ All notable changes to AI Usage are documented in this file.
 - “Set Up Separate Claude Account…” no longer reuses an expired login. The wizard now asks for a new browser sign-in whenever the isolated token has expired, instead of importing a dead token and failing again with “Claude session expired”.
 - The wizard now stops with a clear message if the browser signed in a different account than the one entered, instead of silently connecting the wrong account.
 - The sign-in page now opens in the selected Chrome profile even when Chrome is already running.
+- The wizard no longer blocks “Connect Secure Account” when macOS prevents reading Chrome’s profile list. Sign-in then opens in the default browser.
 
 ## 1.13 — 2026-09-24
 

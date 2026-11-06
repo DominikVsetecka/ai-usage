@@ -1405,7 +1405,6 @@ private struct ClaudeGuidedLoginSheet: View {
 
     private var canStart: Bool {
         !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        selectedChromeProfile != nil &&
         !loginState.isRunning
     }
 
@@ -1433,10 +1432,15 @@ private struct ClaudeGuidedLoginSheet: View {
 
                     LabeledContent("Open login in") {
                         if chromeProfiles.isEmpty {
-                            HStack {
-                                Text("No Chrome profiles found")
-                                    .foregroundStyle(.red)
-                                Button("Check Again", action: reloadChromeProfiles)
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("Default browser")
+                                    Button("Check Again", action: reloadChromeProfiles)
+                                }
+                                Text("Chrome profiles could not be read (macOS may block access). Make sure \(email.isEmpty ? "the account" : email) is signed in to claude.ai in your default browser.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 290, alignment: .leading)
                             }
                         } else {
                             Picker("", selection: $selectedChromeProfileID) {
@@ -1514,9 +1518,15 @@ private struct ClaudeGuidedLoginSheet: View {
                 .font(.callout)
         case .running:
             VStack(alignment: .leading, spacing: 5) {
-                Label("Finish signing in in Chrome. This window will detect completion automatically.", systemImage: "hourglass")
-                Text("If Chrome shows the wrong account, choose the selected profile in Chrome before continuing.")
-                    .foregroundStyle(.secondary)
+                if selectedChromeProfile != nil {
+                    Label("Finish signing in in Chrome. This window will detect completion automatically.", systemImage: "hourglass")
+                    Text("If Chrome shows the wrong account, choose the selected profile in Chrome before continuing.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Label("Finish signing in in your browser. This window will detect completion automatically.", systemImage: "hourglass")
+                    Text("If the browser shows the wrong account, switch accounts on claude.ai before continuing.")
+                        .foregroundStyle(.secondary)
+                }
                 if let manualLoginURL {
                     Divider()
                         .padding(.vertical, 6)
@@ -1586,7 +1596,7 @@ private struct ClaudeGuidedLoginSheet: View {
     }
 
     private func startLogin() {
-        guard let chromeProfile = selectedChromeProfile else { return }
+        let chromeProfile = selectedChromeProfile
         loginState = .running
         manualLoginURL = nil
         authorizationCode = ""
