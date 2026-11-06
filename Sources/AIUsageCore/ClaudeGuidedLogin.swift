@@ -42,6 +42,7 @@ public enum ClaudeGuidedLoginError: LocalizedError, Equatable, Sendable {
     case cancelled
     case statusUnavailable
     case authenticationNotCompleted
+    case wrongAccount(expected: String, actual: String)
 
     public var errorDescription: String? {
         switch self {
@@ -59,6 +60,8 @@ public enum ClaudeGuidedLoginError: LocalizedError, Equatable, Sendable {
             "Claude could not verify the new isolated login"
         case .authenticationNotCompleted:
             "The isolated Claude account is not signed in yet"
+        case .wrongAccount(let expected, let actual):
+            "The browser signed in as \(actual) instead of \(expected). Switch to \(expected) in the selected Chrome profile, then retry."
         }
     }
 }
@@ -103,15 +106,28 @@ public struct ClaudeChromeProfileReader: Sendable {
 }
 
 public struct ClaudeGuidedLoginService: Sendable {
+    /// An isolated login is only reused when its access token stays valid for
+    /// at least this long. The Secure Profile refreshes 5 minutes before
+    /// expiry and rotates the refresh token on the way, which leaves the
+    /// isolated copy behind with an expired access token and a dead refresh
+    /// token. `claude auth status` still reports such a copy as logged in, so
+    /// the token's own expiry is the signal that it may have gone stale.
+    public static let reusableLoginMinimumLifetime: TimeInterval = 30 * 60
+
     private let homeDirectory: URL
     private let runner: InteractivePTYRunner
+    private let isolatedCredentials: @Sendable (String) -> ClaudeOAuthCredentials?
 
     public init(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        runner: InteractivePTYRunner = InteractivePTYRunner()
+        runner: InteractivePTYRunner = InteractivePTYRunner(),
+        isolatedCredentials: @escaping @Sendable (String) -> ClaudeOAuthCredentials? = {
+            try? ClaudeCodeCredentialImporter().isolatedCredentials(configDirectory: $0)
+        }
     ) {
         self.homeDirectory = homeDirectory
         self.runner = runner
+        self.isolatedCredentials = isolatedCredentials
     }
 
     public func login(
@@ -133,13 +149,18 @@ public struct ClaudeGuidedLoginService: Sendable {
 
         // A browser login may already have completed even if an earlier UI
         // attempt failed later while probing `/usage`. Reuse that isolated
-        // credential instead of forcing another SSO round-trip.
+        // credential instead of forcing another SSO round-trip, but only
+        // while it is demonstrably fresh: once imported, the Secure Profile
+        // rotates the refresh token and the isolated copy goes stale.
         if let existing = try? authenticationStatus(
             configDirectory: configURL.path,
             claudeExecutable: claudeExecutable
         ), existing.loggedIn,
            existing.accountEmail == nil ||
-            existing.accountEmail?.localizedCaseInsensitiveCompare(cleanEmail) == .orderedSame {
+            existing.accountEmail?.localizedCaseInsensitiveCompare(cleanEmail) == .orderedSame,
+           let credentials = isolatedCredentials(configURL.path),
+           credentials.expiresAtMilliseconds != nil,
+           !credentials.needsRefresh(buffer: Self.reusableLoginMinimumLifetime) {
             return ClaudeGuidedLoginResult(
                 configDirectory: configURL.path,
                 accountLabel: existing.accountEmail ?? cleanEmail
@@ -181,6 +202,12 @@ public struct ClaudeGuidedLoginService: Sendable {
             claudeExecutable: claudeExecutable
         )
         guard status.loggedIn else { throw ClaudeGuidedLoginError.authenticationNotCompleted }
+        // `--email` is only a hint: the browser authorizes whichever account
+        // its claude.ai session belongs to.
+        if let actual = status.accountEmail,
+           actual.localizedCaseInsensitiveCompare(cleanEmail) != .orderedSame {
+            throw ClaudeGuidedLoginError.wrongAccount(expected: cleanEmail, actual: actual)
+        }
 
         return ClaudeGuidedLoginResult(
             configDirectory: configURL.path,
@@ -259,10 +286,13 @@ public struct ClaudeGuidedLoginService: Sendable {
         return URL(string: String(rawURL))
     }
 
+    /// `open -a` drops `--args` when Chrome is already running, so the URL
+    /// never reached the selected profile. `-n` starts a short-lived Chrome
+    /// process that hands the profile and URL to the running instance.
     public static let chromeBrowserHelperScript = """
     #!/bin/zsh
     profile="${AI_USAGE_CHROME_PROFILE:-Default}"
-    exec /usr/bin/open -a "Google Chrome" --args "--profile-directory=${profile}" "$@"
+    exec /usr/bin/open -na "Google Chrome" --args "--profile-directory=${profile}" "$@"
     """
 
     private static let conflictingAuthenticationEnvironmentKeys: Set<String> = [

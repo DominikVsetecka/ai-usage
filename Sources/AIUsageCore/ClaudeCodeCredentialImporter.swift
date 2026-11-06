@@ -67,6 +67,14 @@ public struct ClaudeCodeCredentialImporter: Sendable {
         )
     }
 
+    /// Read-only look at the credential Claude Code currently holds for one
+    /// explicit `CLAUDE_CONFIG_DIR`, without copying it anywhere.
+    public func isolatedCredentials(configDirectory: String) throws -> ClaudeOAuthCredentials? {
+        let service = Self.keychainService(configDirectory: configDirectory)
+        guard let data = try readKeychainData(service: service) else { return nil }
+        return try Self.parseCredentials(data)
+    }
+
     public static func keychainService(configDirectory: String) -> String {
         let path = normalizedConfigDirectory(configDirectory).path
         let digest = SHA256.hash(data: Data(path.utf8))

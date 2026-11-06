@@ -2093,7 +2093,7 @@ private struct InfoView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Text("Version 1.13 · 2026-09-24")
+            Text("Version 1.14 · 2026-11-06")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

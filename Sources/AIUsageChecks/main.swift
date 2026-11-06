@@ -411,6 +411,78 @@ do {
     // Expected.
 }
 
+// Fake `claude`: `auth status` prints status.json from the isolated config
+// directory; `auth login` records the call and promotes status-after-login.json.
+let fakeClaudeHome = URL(fileURLWithPath: NSTemporaryDirectory())
+    .appendingPathComponent("ai-usage-guided-reuse-\(UUID().uuidString)", isDirectory: true)
+let fakeClaude = fakeClaudeHome.appendingPathComponent("fake-claude")
+try FileManager.default.createDirectory(at: fakeClaudeHome, withIntermediateDirectories: true)
+try Data("""
+#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
+  echo login >> "$CLAUDE_CONFIG_DIR/login-calls"
+  cp "$CLAUDE_CONFIG_DIR/status-after-login.json" "$CLAUDE_CONFIG_DIR/status.json"
+  exit 0
+fi
+cat "$CLAUDE_CONFIG_DIR/status.json"
+""".utf8).write(to: fakeClaude)
+try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeClaude.path)
+let fakeClaudeConfig = ClaudeGuidedLoginService.configDirectory(homeDirectory: fakeClaudeHome, connectionID: "claude1")
+try FileManager.default.createDirectory(at: fakeClaudeConfig, withIntermediateDirectories: true)
+let workStatus = #"{"loggedIn":true,"email":"work@company.invalid"}"#
+
+func runFakeGuidedLogin(isolatedExpiresIn: TimeInterval?, statusAfterLogin: String) throws -> (ClaudeGuidedLoginResult, Int) {
+    try Data(workStatus.utf8).write(to: fakeClaudeConfig.appendingPathComponent("status.json"))
+    try Data(statusAfterLogin.utf8).write(to: fakeClaudeConfig.appendingPathComponent("status-after-login.json"))
+    try? FileManager.default.removeItem(at: fakeClaudeConfig.appendingPathComponent("login-calls"))
+    let credentials = ClaudeOAuthCredentials(
+        accessToken: "isolated-fixture-access",
+        refreshToken: "isolated-fixture-refresh",
+        expiresAtMilliseconds: isolatedExpiresIn.map { (Date().timeIntervalSince1970 + $0) * 1_000 }
+    )
+    let result = try ClaudeGuidedLoginService(
+        homeDirectory: fakeClaudeHome,
+        isolatedCredentials: { _ in credentials }
+    ).login(
+        connectionID: "claude1",
+        email: "work@company.invalid",
+        usesSSO: false,
+        chromeProfile: ClaudeChromeProfile(directoryName: "Default", displayName: "Work"),
+        claudeExecutable: fakeClaude.path
+    )
+    let calls = (try? String(contentsOf: fakeClaudeConfig.appendingPathComponent("login-calls"), encoding: .utf8))?
+        .split(separator: "\n").count ?? 0
+    return (result, calls)
+}
+
+let freshReuse = try runFakeGuidedLogin(isolatedExpiresIn: 4 * 3600, statusAfterLogin: workStatus)
+check(freshReuse.1 == 0, "guided login should reuse a fresh isolated login without another browser sign-in")
+let staleReuse = try runFakeGuidedLogin(isolatedExpiresIn: -3600, statusAfterLogin: workStatus)
+check(
+    staleReuse.1 == 1,
+    "guided login must sign in again when the isolated token expired, even though `claude auth status` still says logged in"
+)
+check(staleReuse.0.accountLabel == "work@company.invalid", "guided login should report the freshly signed-in account")
+let unknownExpiry = try runFakeGuidedLogin(isolatedExpiresIn: nil, statusAfterLogin: workStatus)
+check(unknownExpiry.1 == 1, "guided login must not reuse an isolated login whose token expiry is unknown")
+do {
+    _ = try runFakeGuidedLogin(
+        isolatedExpiresIn: -3600,
+        statusAfterLogin: #"{"loggedIn":true,"email":"private@example.invalid"}"#
+    )
+    check(false, "guided login should reject a browser sign-in that returned a different account")
+} catch ClaudeGuidedLoginError.wrongAccount(let expected, let actual) {
+    check(
+        expected == "work@company.invalid" && actual == "private@example.invalid",
+        "guided login should name the expected and the actually signed-in account"
+    )
+}
+check(
+    ClaudeGuidedLoginService.chromeBrowserHelperScript.contains("open -na \"Google Chrome\""),
+    "guided login browser helper must start a new Chrome process so --args reach an already running Chrome"
+)
+try? FileManager.default.removeItem(at: fakeClaudeHome)
+
 let ptyCancellationToken = PTYCancellationToken()
 let ptyCancellationCheck = Task.detached { () -> Bool in
     do {
