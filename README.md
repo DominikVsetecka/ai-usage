@@ -1,14 +1,15 @@
 # AI Usage
 
-A lightweight macOS menu bar app that shows your Claude and Codex quota at a glance.
+A lightweight macOS menu bar app that shows your Claude and Codex quota at a glance — for as many accounts as you use.
 
-Click the menu bar item to open a popover with per-provider details, burn-rate sparklines, and reset countdowns.
+Click the menu bar item to open a popover with per-account details, burn history and reset countdowns. Settings › Accounts shows every account as a card, explains what is wrong when a connection breaks, and walks you through adding or repairing accounts.
 
 <div align="center">
-  <img src="ai-usage-popover-2026-07v3.png" width="320" alt="Popover with a Visual bar style and an extra model-scoped quota row">
-  <img src="ai-usage-settings-popover-2026-07.png" width="320" alt="Popover settings: bar style, per-connection window and percent controls">
-  <img src="ai-usage-history-2026-07.png" width="320" alt="History">
+  <img src="docs/screenshots/popover.png" width="360" alt="Popover with two Claude and two Codex accounts, burn history and reset countdowns">
+  <img src="docs/screenshots/accounts.png" width="460" alt="Settings › Accounts: menu bar preview, a banner for the account that needs a new login, account cards with countdowns">
 </div>
+
+<sub>All screenshots use made-up demo accounts and values.</sub>
 
 ## Requirements
 
@@ -18,10 +19,10 @@ Click the menu bar item to open a popover with per-provider details, burn-rate s
   xcode-select --install
   ```
   (Full [Xcode](https://developer.apple.com/xcode/) or the [swift.org](https://swift.org/download/) toolchain also work.)
-- **`claude`** — [Anthropic Claude Code](https://claude.ai/code) installed and in `$PATH`
-- **`codex`** — [OpenAI Codex CLI](https://github.com/openai/codex) installed and in `$PATH`
+- **`claude`** — [Anthropic Claude Code](https://claude.ai/code), for Claude accounts (used for the browser sign-in)
+- **`codex`** — [OpenAI Codex CLI](https://github.com/openai/codex), for Codex accounts (used for sign-in and reading usage)
 
-Each provider can be individually disabled in Settings if not installed.
+You only need the CLI of the provider you add accounts for.
 
 ## Build & Run
 
@@ -69,83 +70,69 @@ If you do copy the built binary to another Mac (e.g. via a network share), that 
 
 ## Features
 
-- **Menu bar** — one value per enabled provider; configurable font size, weight, and color mode (white / dimmed / usage gradient)
-- **Popover** — 5-hour, 1-week, and (where reported) extra model-scoped quota windows per provider, with a configurable "Visual" bar (time-remaining fill + burn history as blocks or a line), percentage, and reset countdown
-- **Per-connection popover controls** — choose which windows (5-hour / 1-week / Extra) appear per source, and how the percent number shows: used vs. remaining override, hidden entirely, or global size/weight
-- **Extra model-scoped quotas** — some plans report a separate weekly cap for a specific model (e.g. a "Fable" limit) alongside the general weekly quota; AI Usage picks these up automatically from the Claude API and shows a row per model — **Secure profile connection only**, not available via the Claude CLI text screen
-- **Window-scoped burn history** — cropped to the active quota window, with hover tooltips showing date, time, and value; optional styling to merge unchanged blocks, round the step corners, or connect steps into one smooth curve
-- **Pace estimate** — optional "≈Xh Ym left at this pace" next to the 5-hour reset, projected from the burn rate since the last reset; can be limited to only when it'd run out before the reset, or always shown
-- **Sparkline direction** — ascending (usage rises, default) or descending (quota drops from top)
-- **Local history** — usage logged to `~/.ai-usage/history/YYYY-MM-DD.jsonl` on ≥1% change or every 30 min; 30-day retention
-- **History tab** — line chart with 1-day / 7-day / 30-day picker, per-series toggle chips to declutter multi-connection charts, and a "Show in Finder" button
-- **Secure Claude profiles** — OAuth credentials imported into a separate app-owned Keychain entry; never touches Claude Code's own login
-- **Guided multi-account login** — connect each Claude source through its own official Claude Code login and Chrome profile, without logging another account out
-- **Custom icons** — pick any SVG or PNG per provider via file picker; stored as Base64 in `config.json`; no brand logos are bundled
-- **Configurable refresh** — 15 s / 30 s / 1 min / 2 min / 5 min
+- **Any number of accounts** — add, remove and reorder Claude and Codex accounts; removing can be undone for 8 seconds
+- **Guided wizard** — sign in through the browser with an own login (recommended) or read Claude Code's login live; picks a free Chrome profile, catches a wrong or already connected account, and saves nothing until a real usage check succeeds
+- **Clear connection state** — network trouble, rate limits and a locked Keychain after wake heal on their own and keep the last value visible; only an expired login, a switched account or an incompatible CLI ask you to act, with a banner, a link in the popover and one clickable notification
+- **Countdowns** — every account shows when it updates next, and a rate-limited account shows when it is asked again
+- **Connection history** — logins, repairs, removals and state changes per account, stored locally
+- **Keychain inventory** — what AI Usage stores, which item belongs to which account, and orphaned items you can delete; tokens are never shown, only their last four characters
+- **Several Codex accounts** — every extra ChatGPT login gets its own Codex folder, your normal `~/.codex` stays untouched; Codex start options adapt to CLI updates automatically
+- **Menu bar** — one value per account; configurable font size, weight and color mode (white / dimmed / usage gradient), live preview in Settings
+- **Popover** — 5-hour, 1-week and (where reported) extra model-scoped quota windows per account, with a configurable "Visual" bar (time-remaining fill + burn history as blocks or a line), percentage and reset countdown
+- **Per-account display** — name, short label, icon, menu bar value and which popover rows and percent style each account shows
+- **Extra model-scoped quotas** — some plans report a separate weekly cap for a specific model (e.g. "Fable"); shown automatically for Claude accounts with an own login
+- **Pace estimate** — optional "≈Xh Ym left at this pace" next to the 5-hour reset
+- **Local usage history** — logged to `~/.ai-usage/history/YYYY-MM-DD.jsonl` on ≥1% change or every 30 min; 30-day retention; History tab with chart and per-series toggles
+- **Custom icons** — pick any SVG or PNG per account; no brand logos are bundled
+- **Configurable refresh** — 90 seconds / 2 minutes / 5 minutes
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Configuration
 
-First launch creates a default config at `~/.ai-usage/config.json`. All settings are editable via the popover's gear icon.
+All settings are editable in Settings (gear icon in the popover) and saved to `~/.ai-usage/config.json`. A fresh install starts without accounts; an older config with the fixed Claude 1 / Claude 2 / Codex slots is migrated once and keeps a `config.v1.json` backup.
 
-History is stored at `~/.ai-usage/history/` and is not committed to git.
+### Adding an account
 
-### Two Claude accounts
+Open Settings › Accounts and click **Add Account**.
 
-**Recommended: Guided separate login**
+<div align="center">
+  <img src="docs/screenshots/wizard.png" width="560" alt="Add Account wizard: choose between an own browser login and reading Claude Code's login">
+</div>
 
-This is the reliable path when both Claude accounts should stay signed in at the same time.
+**Claude**
 
-1. Open Settings → Connections and choose the Claude connection you want to set up.
-2. Click **Set Up Separate Claude Account…**.
-3. Select the Chrome profile that is already signed into that account, confirm the email, and enable company SSO when required.
-4. Click **Connect Secure Account** and finish Anthropic's official Claude Code login in Chrome if it opens.
-5. If company SSO finishes but the wizard still waits, click **Open Alternative Sign-In**, complete that page, and paste the authorization code it shows into the wizard.
-6. Once AI Usage reports the connected account, close the wizard and choose **Save & Refresh**.
+- **Own login in the browser (recommended).** Pick the Chrome profile that is signed in to the account, confirm the e-mail and enable SSO if your company uses it. AI Usage runs Anthropic's official `claude auth login` in its own folder under `~/.ai-usage/claude-accounts/`, then keeps only that account's OAuth token in an app-owned Keychain item. Only AI Usage refreshes this token, so Claude Code, VS Code or Zed can never invalidate it. If the browser signs in a different account than the one you entered, nothing is saved.
+- **Read Claude Code's login.** No second login: AI Usage reads Claude Code's credential on every check, stores nothing and never refreshes it. If you switch accounts in Claude Code, the account pauses with "Account changed" instead of showing someone else's numbers.
 
-AI Usage creates a dedicated directory under `~/.ai-usage/claude-accounts/` for the official login. After verifying the account, it copies exactly that directory's OAuth credential into a separate app-owned Keychain entry and configures the connection as a Secure profile. It never reads Chrome cookies or passwords, and it does not alter the Claude login used by another connection, Terminal, VS Code or Zed.
+**Codex**
 
-Guided accounts use the direct OAuth usage connection after setup, so they do not depend on Claude Code's `/usage` terminal UI and can also report extra model-scoped limits.
+- **Sign in with ChatGPT in the browser.** AI Usage runs the official `codex login` with its own folder under `~/.ai-usage/codex-accounts/`, so you can add as many ChatGPT accounts as you like. If the browser reuses a session that is already connected, the wizard stops and offers a fresh sign-in — "Open in Private Chrome Window" avoids picking up an existing chatgpt.com session.
+- **Use the Codex login on this Mac.** Reads the login your Codex CLI already uses (`~/.codex`).
 
-**Advanced: import the current global Claude Code login**
+Codex keeps and refreshes its own tokens; AI Usage only reads usage through `codex app-server`.
 
-Each account gets its own isolated Keychain entry. After setup the `claude` CLI is no longer needed for those sources.
+### When a connection breaks
 
-> **Why does it access the Keychain?**
-> Secure profile mode imports the OAuth token that Claude Code already stored on your Mac — it reads from the existing Keychain item once, copies it into a *separate, app-owned* entry under the service name `ai-usage`, and never touches the original again. This lets AI Usage authenticate directly to the Claude API without keeping the CLI running. You can verify this in Keychain Access.app by searching for "ai-usage". No credentials are written to disk or transmitted anywhere other than the Anthropic API.
+<div align="center">
+  <img src="docs/screenshots/reconnect.png" width="560" alt="Reconnect wizard explaining in plain words why the account lost its login, with recent history">
+</div>
 
-1. Make sure Claude Code CLI is logged in with your **first** account.
-2. Settings → Claude 1 → Connection: **Secure profile** → "Import Current Claude Account" → Save & Refresh.
-3. In your terminal, switch Claude Code to the second account:
-   ```bash
-   claude auth logout
-   claude auth login   # log in with the second account
-   ```
-4. Settings → Claude 2 → Connection: **Secure profile** → "Import Current Claude Account" → Save & Refresh.
-5. Switch Claude Code back to whichever account you use interactively:
-   ```bash
-   claude auth logout
-   claude auth login
-   ```
+The card turns red, a banner names the account and the popover shows a "fix in Settings" link. **Reconnect** explains in plain words what happened — for example that an old import shared its token with Claude Code — and signs the account in again. Name, display settings and history stay as they are.
 
-AI Usage never writes to Claude Code's own Keychain item or `~/.claude.json`.
+Accounts imported with an older version copied Claude Code's token. Claude Code and AI Usage then refresh the same token, and whichever refreshes first breaks the other. Such accounts are marked "Copy of Claude Code's login (legacy)"; **Switch to Own Login…** fixes it for good.
 
-**Alternative: CLI mode with separate config directories**
+### Removing an account
 
-```bash
-CLAUDE_CONFIG_DIR=~/.claude-account-2 claude auth login
-```
-
-Enable Claude 2 in Settings, set Connection to **Claude CLI**, and set `CLAUDE_CONFIG_DIR` to `~/.claude-account-2`. Both accounts run via the CLI in parallel; no Keychain import needed.
+**Remove…** lists what will be deleted (its Keychain item or its own Codex folder) and lets you keep the history. You can undo for 8 seconds. Claude Code's and Codex's own logins are never touched.
 
 ## Privacy
 
-- No telemetry, no analytics, no network requests beyond the CLIs you configure
-- All data stays locally under `~/.ai-usage/`
-- History files and `config.json` live in `~/.ai-usage/` — never inside the app bundle or repo
-- In secure profile mode, credentials are stored in app-owned macOS Keychain entries (service: `ai-usage`); the original Claude Code Keychain item is never modified
-- No account data, tokens, or personal information is committed to this repository
+- No telemetry, no analytics. Network requests go only to Anthropic's usage and token endpoints for Claude accounts with an own login; Codex usage is read through your local Codex CLI
+- Everything stays local under `~/.ai-usage/`: `config.json`, usage history (`history/`), connection history (`events.jsonl`), notification state, and the login folders under `claude-accounts/` and `codex-accounts/` — never inside the app bundle or this repository
+- Claude tokens of own-login accounts are stored in app-owned Keychain items (service `app.ai-usage.claude-profile`, this Mac only, when unlocked); Claude Code's own Keychain item is never modified
+- The connection history never contains tokens — at most a token's last four characters
+- No account data, tokens or personal information are committed to this repository; the screenshots use demo data (`AI_USAGE_DEMO_FILE`)
 
 ## License
 

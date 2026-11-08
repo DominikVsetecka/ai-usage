@@ -2,6 +2,30 @@
 
 All notable changes to AI Usage are documented in this file.
 
+## 1.15 — 2026-11-08
+
+### Changed
+
+- Settings › Connections is now **Accounts**: every account is a card with its current 5-hour and weekly values, a live preview of the menu bar on top, and one detail view with Display, Connection and Keychain tabs.
+- Accounts are a free list. Add as many Claude and Codex accounts as you like, remove them again, and reorder them in the menu bar. Removing can be undone for 8 seconds.
+- A guided wizard adds and repairs accounts: own browser login (recommended) or reading Claude Code's login live, Chrome profile choice, wrong-account and duplicate detection, a real usage check before anything is saved, and a before/after summary.
+- A second Codex account gets its own Codex folder and is signed in from the wizard, without touching your normal `~/.codex` login.
+- Connection history: state changes, logins, repairs and removals are kept locally in `~/.ai-usage/events.jsonl` and shown per account.
+- Keychain inventory shows what AI Usage stores (never the token itself, only its last four characters) and lets you delete orphaned items.
+- Each account now has a clear state. Network trouble, rate limits and a locked Keychain after wake heal on their own and keep the last value visible; only an expired login, a switched account or an incompatible CLI ask you to act, with a banner, a link in the popover and one notification that opens Settings.
+- A fresh install starts without accounts instead of pre-filled CLI slots. Existing configs are migrated once and keep a `config.v1.json` backup.
+- Every account card shows when it updates next ("Checked 14:03 · next in 1:12"); a rate-limited account shows when it is asked again ("retry in 3:40").
+- The Codex step of the wizard is a ChatGPT sign-in: choose between an own login in the browser and the Codex login already on this Mac. "Open in Private Chrome Window" avoids reusing an existing chatgpt.com session, and a login that turns out to be an already connected account is caught instead of added twice.
+- The wizard lets you pick an icon next to the short label, and its menu bar preview follows the used/remaining setting.
+- The Keychain inventory highlights the items of the selected account.
+- Demo mode (`AI_USAGE_DEMO_FILE`) shows made-up accounts and values, used for the README screenshots.
+
+### Fixed
+
+- Codex stopped working after updating the Codex CLI to 0.166, which no longer accepts `-a untrusted`. AI Usage now tries known start options in order and remembers the working one per CLI version.
+- The popover now counts every row when sizing itself and scrolls when many accounts don't fit, instead of cutting rows off.
+- Accounts imported from Claude Code kept losing their connection because Claude Code and AI Usage refreshed the same token. They are now marked as a legacy import, and the wizard switches them to an own login in a few clicks.
+
 ## 1.14 — 2026-11-06
 
 ### Fixed
