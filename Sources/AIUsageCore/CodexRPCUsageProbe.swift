@@ -27,7 +27,7 @@ public struct CodexRPCUsageProbe: UsageProbing {
         guard enabled else {
             return UsageSnapshot(sourceID: sourceID, label: label, enabled: false, percentUsed: nil, status: .disabled, updatedAt: Date(), errorMessage: nil)
         }
-        guard let command else { return failure("Missing Codex RPC settings") }
+        guard let command else { return failure("Missing Codex RPC settings", kind: .notConfigured) }
 
         do {
             let result = try await Task.detached(priority: .utility) {
@@ -51,13 +51,15 @@ public struct CodexRPCUsageProbe: UsageProbing {
                 oneWeek: result.oneWeek,
                 standardWindowsAuthoritative: true
             )
+        } catch let error as CodexRPCError {
+            return failure(error.localizedDescription, kind: error.failure)
         } catch {
             return failure(error.localizedDescription)
         }
     }
 
-    private func failure(_ message: String) -> UsageSnapshot {
-        UsageSnapshot(sourceID: sourceID, label: label, enabled: enabled, percentUsed: nil, status: .failed, updatedAt: Date(), errorMessage: message)
+    private func failure(_ message: String, kind: UsageFailure? = nil) -> UsageSnapshot {
+        UsageSnapshot(sourceID: sourceID, label: label, enabled: enabled, percentUsed: nil, status: .failed, updatedAt: Date(), errorMessage: message, failure: kind)
     }
 }
 
@@ -97,18 +99,85 @@ public struct CodexRateLimitResult: Equatable, Sendable {
 }
 
 public enum CodexRPCClient {
+    /// Start variants for `codex app-server`, tried in order. Optional flags
+    /// changed between CLI releases before (`-a untrusted` disappeared in
+    /// 0.16x and broke every check while the login itself was fine), so no
+    /// single variant is hard-wired: the first one the installed CLI accepts
+    /// wins and is remembered per CLI version.
+    public static let argumentLadder: [[String]] = [
+        ["-s", "read-only", "app-server"],
+        ["app-server"]
+    ]
+
+    private static let memo = CodexArgumentMemo()
+    private static let ignoreSIGPIPE: Void = {
+        // A CLI that rejects its arguments exits before reading stdin; writing
+        // the handshake into that closed pipe must fail with EPIPE instead of
+        // killing the app.
+        signal(SIGPIPE, SIG_IGN)
+    }()
+
     public static func fetch(command: CommandConfig) throws -> CodexRateLimitResult {
+        _ = ignoreSIGPIPE
         let executable = NSString(string: command.executable).expandingTildeInPath
         guard FileManager.default.isExecutableFile(atPath: executable) else {
-            throw CodexRPCError("Missing executable: \(executable)")
+            throw CodexRPCError("Missing executable: \(executable)", failure: .notConfigured)
         }
+        let version = cliVersion(executable: executable)
+        let key = "\(executable)|\(version ?? "unknown")"
+        let first = memo.workingIndex(for: key) ?? 0
+        let order = Array(first..<argumentLadder.count) + Array(0..<first)
 
+        var rejection: CodexRPCError?
+        for index in order {
+            do {
+                let result = try fetch(command: command, executable: executable, arguments: argumentLadder[index])
+                memo.remember(index, for: key)
+                return result
+            } catch let error as CodexRPCError where error.isArgumentRejection {
+                rejection = error
+            }
+        }
+        let detail = rejection?.message.split(separator: "\n").first.map(String.init) ?? "no start variant was accepted"
+        throw CodexRPCError(
+            "Codex CLI \(version ?? "") is not compatible with AI Usage yet: \(detail)",
+            failure: .incompatible
+        )
+    }
+
+    /// `codex --version` → "0.166.0", cached until the binary behind the
+    /// (usually symlinked) path changes, e.g. after `brew upgrade`.
+    public static func cliVersion(executable: String) -> String? {
+        let resolved = URL(fileURLWithPath: executable).resolvingSymlinksInPath()
+        let modified = (try? FileManager.default.attributesOfItem(atPath: resolved.path)[.modificationDate] as? Date) ?? nil
+        let cacheKey = "\(resolved.path)|\(modified?.timeIntervalSince1970 ?? 0)"
+        if let cached = memo.version(for: cacheKey) { return cached }
+        guard let result = try? CommandRunner().run(CommandConfig(executable: executable, arguments: ["--version"], timeoutSeconds: 5)),
+              result.exitCode == 0 else { return nil }
+        let version = parseVersion(result.standardOutput)
+        if let version { memo.rememberVersion(version, for: cacheKey) }
+        return version
+    }
+
+    public static func parseVersion(_ output: String) -> String? {
+        guard let range = output.range(of: #"\d+\.\d+(\.\d+)?"#, options: .regularExpression) else { return nil }
+        return String(output[range])
+    }
+
+    /// stderr of a CLI that refused its command line (clap-style parser).
+    public static func isArgumentRejection(_ stderr: String) -> Bool {
+        let text = stderr.lowercased()
+        return ["invalid value", "unexpected argument", "possible values", "unrecognized subcommand", "unrecognized option"]
+            .contains(where: text.contains)
+    }
+
+    private static func fetch(command: CommandConfig, executable: String, arguments: [String]) throws -> CodexRateLimitResult {
         let process = Process()
         let input = Pipe()
         let output = Pipe()
         let error = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = ["-s", "read-only", "-a", "untrusted", "app-server"]
+        process.arguments = arguments
         process.currentDirectoryURL = safeWorkingDirectory()
         process.standardInput = input
         process.standardOutput = output
@@ -134,6 +203,16 @@ public enum CodexRPCClient {
         var buffer = Data()
         var nextID = 1
 
+        func exitError() -> CodexRPCError {
+            process.waitUntilExit()
+            let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if isArgumentRejection(stderr) {
+                return CodexRPCError(stderr, failure: .incompatible, isArgumentRejection: true)
+            }
+            return CodexRPCError(stderr.isEmpty ? "Codex app-server exited unexpectedly" : stderr)
+        }
+
         func send(method: String, params: [String: Any] = [:], notification: Bool = false) throws -> Int? {
             var payload: [String: Any] = ["method": method, "params": params]
             let id: Int?
@@ -145,7 +224,11 @@ public enum CodexRPCClient {
                 nextID += 1
             }
             let data = try JSONSerialization.data(withJSONObject: payload) + Data([0x0A])
-            try input.fileHandleForWriting.write(contentsOf: data)
+            do {
+                try input.fileHandleForWriting.write(contentsOf: data)
+            } catch {
+                throw exitError()
+            }
             return id
         }
 
@@ -163,19 +246,19 @@ public enum CodexRPCClient {
                     guard let messageID = (message["id"] as? NSNumber)?.intValue, messageID == id else {
                         continue
                     }
-                    if let error = message["error"] as? [String: Any] {
-                        throw CodexRPCError(error["message"] as? String ?? "Codex RPC error")
+                    if let rpcError = message["error"] as? [String: Any] {
+                        let text = rpcError["message"] as? String ?? "Codex RPC error"
+                        let isAuth = text.lowercased().contains("authentication required") || text.lowercased().contains("not logged in")
+                        throw CodexRPCError(isAuth ? "Codex is not signed in for this account" : text, failure: isAuth ? .authentication : nil)
                     }
                     return message
                 }
                 if !process.isRunning {
-                    let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    throw CodexRPCError(stderr?.isEmpty == false ? stderr! : "Codex app-server exited unexpectedly")
+                    throw exitError()
                 }
                 usleep(20_000)
             }
-            throw CodexRPCError("Codex RPC timed out")
+            throw CodexRPCError("Codex RPC timed out", failure: .network)
         }
 
         let initializeID = try send(
@@ -339,7 +422,10 @@ public enum CodexRPCClient {
         return url
     }
 
-    private static func processEnvironment(merging custom: [String: String]) -> [String: String] {
+    /// Environment for the Codex process. `CODEX_HOME` may be stored with a
+    /// leading `~` (shorter in the config, readable in Settings); Codex itself
+    /// does not expand it, so it is resolved here.
+    public static func processEnvironment(merging custom: [String: String]) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         let fallbackPath = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         if let existing = environment["PATH"], !existing.isEmpty {
@@ -348,12 +434,51 @@ public enum CodexRPCClient {
             environment["PATH"] = fallbackPath
         }
         environment.merge(custom) { _, new in new }
+        if let home = environment["CODEX_HOME"], home.hasPrefix("~") {
+            environment["CODEX_HOME"] = NSString(string: home).expandingTildeInPath
+        }
         return environment
     }
 }
 
-private struct CodexRPCError: LocalizedError {
+struct CodexRPCError: LocalizedError {
     let message: String
-    init(_ message: String) { self.message = message }
+    let failure: UsageFailure?
+    let isArgumentRejection: Bool
+
+    init(_ message: String, failure: UsageFailure? = nil, isArgumentRejection: Bool = false) {
+        self.message = message
+        self.failure = failure
+        self.isArgumentRejection = isArgumentRejection
+    }
+
     var errorDescription: String? { message }
+}
+
+/// Remembers, per CLI binary and version, which `argumentLadder` entry
+/// worked, so only a CLI update costs an extra failed start.
+private final class CodexArgumentMemo: @unchecked Sendable {
+    private let lock = NSLock()
+    private var working: [String: Int] = [:]
+    private var versions: [String: String] = [:]
+
+    func workingIndex(for key: String) -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        return working[key]
+    }
+
+    func remember(_ index: Int, for key: String) {
+        lock.lock(); defer { lock.unlock() }
+        working[key] = index
+    }
+
+    func version(for key: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return versions[key]
+    }
+
+    func rememberVersion(_ version: String, for key: String) {
+        lock.lock(); defer { lock.unlock() }
+        versions[key] = version
+    }
 }

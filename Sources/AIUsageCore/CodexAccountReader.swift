@@ -7,7 +7,12 @@ import Foundation
 /// in the locally stored OIDC id token.
 public enum CodexAccountReader {
     public static func currentAccountEmail(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> String? {
-        let url = homeDirectory.appendingPathComponent(".codex/auth.json")
+        accountEmail(codexHome: homeDirectory.appendingPathComponent(".codex", isDirectory: true))
+    }
+
+    /// Same, for an explicit `CODEX_HOME` folder.
+    public static func accountEmail(codexHome: URL) -> String? {
+        let url = codexHome.appendingPathComponent("auth.json")
         guard let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tokens = root["tokens"] as? [String: Any],

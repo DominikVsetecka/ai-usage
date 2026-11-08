@@ -22,6 +22,10 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var notifyOnExtraQuotaUsage: Bool?
     public var notifications: NotificationSettings?
     public var visualBlockGap: CGFloat?
+    /// Schema version of the on-disk config. Missing (nil) means a v1 config
+    /// from before accounts became a free list; `AccountMigration` upgrades it
+    /// once and keeps a `config.v1.json` backup.
+    public var configVersion: Int?
     public var sources: [SourceConfig]
 
     public init(
@@ -46,6 +50,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         notifyOnExtraQuotaUsage: Bool? = nil,
         notifications: NotificationSettings? = nil,
         visualBlockGap: CGFloat? = nil,
+        configVersion: Int? = AppConfig.currentConfigVersion,
         sources: [SourceConfig]
     ) {
         self.refreshIntervalSeconds = max(90, refreshIntervalSeconds)
@@ -69,8 +74,11 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.notifyOnExtraQuotaUsage = notifyOnExtraQuotaUsage
         self.notifications = notifications
         self.visualBlockGap = visualBlockGap
+        self.configVersion = configVersion
         self.sources = sources
     }
+
+    public static let currentConfigVersion = 2
 
     public var showsRemainingCountdown: Bool {
         remainingCountdownEnabled ?? false
@@ -154,45 +162,13 @@ public struct AppConfig: Codable, Equatable, Sendable {
         min(Self.popoverPercentFontSizeRange.upperBound, max(Self.popoverPercentFontSizeRange.lowerBound, popoverPercentFontSize ?? 12))
     }
 
+    /// A fresh install starts without accounts — Settings › Accounts walks the
+    /// user through adding Claude or Codex accounts instead of pre-filling
+    /// guessed CLI slots.
     public static let `default` = AppConfig(
         refreshIntervalSeconds: 90,
         remainingCountdownEnabled: false,
-        sources: [
-            SourceConfig(
-                id: "claude1",
-                label: "C1",
-                enabled: true,
-                mode: .claudeCLI,
-                command: CommandConfig(
-                    executable: "/opt/homebrew/bin/claude",
-                    timeoutSeconds: 20
-                ),
-                quota: .session,
-                iconName: "claude"
-            ),
-            SourceConfig(
-                id: "claude2",
-                label: "C2",
-                enabled: false,
-                mode: .claudeCLI,
-                command: CommandConfig(
-                    executable: "/opt/homebrew/bin/claude",
-                    timeoutSeconds: 20
-                ),
-                localPath: "~/.claude-account-2",
-                quota: .session,
-                iconName: "claude"
-            ),
-            SourceConfig(
-                id: "codex",
-                label: "GPT",
-                enabled: true,
-                mode: .codexRPC,
-                command: CommandConfig(executable: "/opt/homebrew/bin/codex", timeoutSeconds: 15),
-                quota: .session,
-                iconName: "openai"
-            )
-        ]
+        sources: []
     )
 
     public static func load(from url: URL?) throws -> AppConfig {
@@ -347,6 +323,14 @@ public struct SourceConfig: Codable, Equatable, Sendable {
     /// popover percent text. Nil inherits the app-wide default.
     public var popoverPercentMode: PercentDisplayMode?
     public var showPercentInPopover: Bool?
+    /// Longer account name shown in Settings ("Claude · Agency"); the short
+    /// `label` stays what the menu bar shows.
+    public var name: String?
+    /// Who owns the OAuth token behind a `.claudeOAuth` source. A token copied
+    /// from Claude Code is shared with it, so whichever side refreshes first
+    /// invalidates the other's copy — the UI uses this to recommend switching
+    /// to an own login.
+    public var credentialOrigin: CredentialOrigin?
 
     public init(
         id: String,
@@ -364,7 +348,9 @@ public struct SourceConfig: Codable, Equatable, Sendable {
         showOneWeekInPopover: Bool? = nil,
         showExtraInPopover: Bool? = nil,
         popoverPercentMode: PercentDisplayMode? = nil,
-        showPercentInPopover: Bool? = nil
+        showPercentInPopover: Bool? = nil,
+        name: String? = nil,
+        credentialOrigin: CredentialOrigin? = nil
     ) {
         self.id = id
         self.label = label
@@ -382,6 +368,39 @@ public struct SourceConfig: Codable, Equatable, Sendable {
         self.showExtraInPopover = showExtraInPopover
         self.popoverPercentMode = popoverPercentMode
         self.showPercentInPopover = showPercentInPopover
+        self.name = name
+        self.credentialOrigin = credentialOrigin
+    }
+
+    public var provider: AccountProvider {
+        switch mode {
+        case .claudeCLI, .claudeOAuth, .claudeCodeLive: .claude
+        case .codexRPC: .codex
+        case .fixture, .command: .other
+        }
+    }
+
+    public var displayName: String {
+        if let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { return name }
+        if let profileName = claudeProfile?.name, !profileName.isEmpty { return profileName }
+        return label
+    }
+
+    /// The signed-in account's e-mail/organisation as far as it is known
+    /// without a network call.
+    public var accountLabel: String? {
+        claudeProfile?.accountLabel ?? claudeCLIAccountLabel
+    }
+
+    /// `CODEX_HOME` for Codex accounts that use their own Codex folder; nil
+    /// means the default `~/.codex`.
+    public var codexHome: String? {
+        get { command?.environment["CODEX_HOME"] }
+        set {
+            var command = self.command ?? CommandConfig(executable: "/opt/homebrew/bin/codex", timeoutSeconds: 15)
+            command.environment["CODEX_HOME"] = newValue
+            self.command = command
+        }
     }
 
     public var resolvedShowFiveHourInPopover: Bool { showFiveHourInPopover ?? true }
@@ -417,7 +436,25 @@ public enum SourceMode: String, Codable, Equatable, Sendable {
     case command
     case claudeCLI
     case claudeOAuth
+    /// Reads Claude Code's own credential on every check. Nothing is stored and
+    /// the token is never refreshed by AI Usage, so Claude Code stays its only
+    /// owner.
+    case claudeCodeLive
     case codexRPC
+}
+
+public enum AccountProvider: String, Codable, Equatable, Sendable {
+    case claude
+    case codex
+    case other
+}
+
+public enum CredentialOrigin: String, Codable, Equatable, Sendable {
+    /// Own login through the guided browser flow; only AI Usage refreshes it.
+    case guidedLogin
+    /// Legacy import that copied Claude Code's token, which Claude Code keeps
+    /// rotating on its own.
+    case claudeCodeCopy
 }
 
 public enum TextColorMode: String, Codable, Equatable, CaseIterable, Sendable {

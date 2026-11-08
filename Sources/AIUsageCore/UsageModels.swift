@@ -7,6 +7,19 @@ public enum SourceStatus: String, Codable, Equatable, Sendable {
     case disabled
 }
 
+/// Why a check failed, as far as the probe could tell. `ConnectionHealth`
+/// turns this into what the user sees and whether they have to act.
+public enum UsageFailure: String, Codable, Equatable, Sendable {
+    case authentication
+    case accountChanged
+    case network
+    case rateLimited
+    case keychainLocked
+    case incompatible
+    case notConfigured
+    case other
+}
+
 public struct ProviderUsageWindow: Equatable, Sendable {
     public let percentUsed: Int
     public let resetDescription: String?
@@ -152,6 +165,10 @@ public struct UsageSnapshot: Equatable, Sendable {
     /// such as Codex RPC use this so a removed/temporarily absent 5-hour limit
     /// clears the old row instead of being restored from stale history.
     public var standardWindowsAuthoritative: Bool
+    public var failure: UsageFailure?
+    /// Set while the provider rate-limits this account: no request is sent
+    /// before this moment.
+    public var retryAt: Date?
 
     public init(
         sourceID: String,
@@ -166,7 +183,9 @@ public struct UsageSnapshot: Equatable, Sendable {
         fiveHour: ProviderUsageWindow? = nil,
         oneWeek: ProviderUsageWindow? = nil,
         extraWindows: [String: ProviderUsageWindow] = [:],
-        standardWindowsAuthoritative: Bool = false
+        standardWindowsAuthoritative: Bool = false,
+        failure: UsageFailure? = nil,
+        retryAt: Date? = nil
     ) {
         self.sourceID = sourceID
         self.label = label
@@ -181,6 +200,8 @@ public struct UsageSnapshot: Equatable, Sendable {
         self.oneWeek = oneWeek
         self.extraWindows = extraWindows
         self.standardWindowsAuthoritative = standardWindowsAuthoritative
+        self.failure = failure
+        self.retryAt = retryAt
     }
 
     public static func idle(from config: SourceConfig) -> UsageSnapshot {

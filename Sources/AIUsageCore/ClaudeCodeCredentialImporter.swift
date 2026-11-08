@@ -30,6 +30,18 @@ public struct ClaudeCodeCredentialImporter: Sendable {
         )
     }
 
+    /// Claude Code's current credential and account, read fresh for a
+    /// `claudeCodeLive` account. Nothing is written anywhere.
+    public func liveCredential() throws -> ClaudeCodeLiveCredential {
+        let imported = try readCurrentCredentials()
+        let metadata = readAccountMetadata(in: homeDirectory)
+        return ClaudeCodeLiveCredential(
+            credentials: imported.credentials,
+            accountIdentifier: metadata.identifier,
+            accountLabel: metadata.label
+        )
+    }
+
     public func importCurrentAccount(profileID: UUID? = nil, preferredName: String) throws -> ImportedClaudeProfile {
         let imported = try readCurrentCredentials()
         let metadata = readAccountMetadata(in: homeDirectory)

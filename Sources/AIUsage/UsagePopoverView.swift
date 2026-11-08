@@ -74,6 +74,9 @@ struct UsagePopoverView: View {
         let providerBaseHeight: CGFloat = 39
         let failedExtraHeight: CGFloat = 28
         let failedCount = enabledSnapshots.filter { $0.status == .failed && $0.percentUsed == nil }.count
+        // "Login needed — fix in Settings…" link under an account that needs the user.
+        let fixLinkHeight: CGFloat = 22
+        let fixLinkCount = enabledSnapshots.filter { ConnectionHealth.of($0).needsUser }.count
 
         let providersHeight = enabledSnapshots.reduce(CGFloat(0)) { total, snapshot in
             let source = config.sources.first(where: { $0.id == snapshot.sourceID })
@@ -89,7 +92,9 @@ struct UsagePopoverView: View {
             + dividerHeight
             + providersHeight
             + CGFloat(failedCount) * failedExtraHeight
-        return CGSize(width: width, height: min(560, max(132, contentHeight)))
+            + CGFloat(fixLinkCount) * fixLinkHeight
+        // With many accounts the list scrolls instead of growing off screen.
+        return CGSize(width: width, height: min(720, max(132, contentHeight)))
     }
 
     private var enabledSnapshots: [UsageSnapshot] {
@@ -106,6 +111,7 @@ struct UsagePopoverView: View {
                     .frame(maxWidth: .infinity)
                     .padding(24)
             } else {
+                ScrollView(.vertical) {
                 VStack(spacing: 0) {
                     ForEach(Array(enabledSnapshots.enumerated()), id: \.element.sourceID) { index, snapshot in
                         let source = viewModel.config.sources.first(where: { $0.id == snapshot.sourceID })
@@ -120,6 +126,8 @@ struct UsagePopoverView: View {
                         }
                     }
                 }
+                }
+                .scrollIndicators(.automatic)
             }
             Divider()
             popoverFooter
@@ -369,6 +377,15 @@ private struct ProviderDetailSection: View {
                     .font(.caption2)
                     .foregroundStyle(.red.opacity(0.75))
                     .lineLimit(2)
+            }
+            if ConnectionHealth.of(snapshot).needsUser {
+                Button {
+                    NotificationCenter.default.post(name: .aiUsageOpenAccounts, object: snapshot.sourceID)
+                } label: {
+                    Label("\(ConnectionHealth.of(snapshot).title) — fix in Settings…", systemImage: "wrench.and.screwdriver")
+                        .font(.caption)
+                }
+                .buttonStyle(.link)
             }
         }
         .padding(.horizontal, 14)

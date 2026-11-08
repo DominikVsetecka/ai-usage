@@ -109,6 +109,9 @@ public enum UsageProbeFactory {
         // (tests, one-off Test Connection) — set to the configured refresh
         // interval exactly, so the periodic cache TTL matches what Settings
         // says even for this one-off case.
+        if let demo = DemoUsageData.load() {
+            return config.sources.map { DemoUsageProbe(source: $0, account: demo.accounts[$0.id]) }
+        }
         let oauthUsageService = oauthService ?? ClaudeOAuthUsageService(cacheTTL: config.refreshIntervalSeconds)
         return config.sources.map { source in
             switch source.mode {
@@ -144,6 +147,16 @@ public enum UsageProbeFactory {
                     profile: source.claudeProfile,
                     quota: source.quota ?? .session,
                     service: oauthUsageService
+                )
+            case .claudeCodeLive:
+                ClaudeOAuthUsageProbe(
+                    sourceID: source.id,
+                    label: source.label,
+                    enabled: source.enabled,
+                    profile: source.claudeProfile,
+                    quota: source.quota ?? .session,
+                    service: oauthUsageService,
+                    live: true
                 )
             case .codexRPC:
                 CodexRPCUsageProbe(

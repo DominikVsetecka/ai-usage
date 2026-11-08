@@ -6,6 +6,8 @@
 DerivedData/
 
 # Local configuration and credentials
+.ai-usage/
+events.jsonl
 .env
 .env.*
 !.env.example

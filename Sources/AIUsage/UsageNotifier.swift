@@ -1,3 +1,4 @@
+import AIUsageCore
 import Foundation
 import UserNotifications
 
@@ -15,6 +16,21 @@ private final class NotificationPresenter: NSObject, UNUserNotificationCenterDel
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .list, .sound])
+    }
+
+    /// Clicking an "account needs you" notification opens Settings › Accounts.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let accountID = response.notification.request.content.userInfo["accountID"] as? String
+        if accountID != nil {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .aiUsageOpenAccounts, object: accountID)
+            }
+        }
+        completionHandler()
     }
 }
 
@@ -42,13 +58,14 @@ enum UsageNotifier {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    private static func post(title: String, body: String) {
+    private static func post(title: String, body: String, accountID: String? = nil) {
         guard Bundle.main.bundleIdentifier != nil else { return }
         ensureDelegate()
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
+        if let accountID { content.userInfo = ["accountID": accountID] }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
             if let error {
@@ -82,9 +99,17 @@ enum UsageNotifier {
              body: "\(sourceLabel): at this pace the 5-hour limit is reached in \(Self.durationText(secondsUntilExhausted)).")
     }
 
-    static func notifyLoginExpired(sourceLabel: String) {
-        post(title: "Login needs attention",
-             body: "\(sourceLabel): usage couldn't be read — the login may have expired. Re-import the profile in Settings.")
+    /// Sent once per change into a state the user has to fix; clicking it
+    /// opens Settings › Accounts.
+    static func notifyNeedsAttention(sourceLabel: String, accountID: String, health: ConnectionHealth) {
+        let detail: String
+        switch health {
+        case .incompatible: detail = "the CLI changed and needs a repair. Your login is fine."
+        case .accountChanged: detail = "Claude Code switched to a different account."
+        case .notConfigured: detail = "this account isn't set up yet."
+        default: detail = "the login has expired. The last value stays visible."
+        }
+        post(title: "\(sourceLabel) needs you", body: "\(sourceLabel): \(detail) Click to fix it in Settings.", accountID: accountID)
     }
 
     static func notifyExtraQuotaResumed(sourceLabel: String, windowName: String) {

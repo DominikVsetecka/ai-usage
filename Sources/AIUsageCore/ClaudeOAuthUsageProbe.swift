@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 public struct HTTPResult: Sendable {
     public let data: Data
@@ -47,6 +48,10 @@ public actor ClaudeOAuthUsageService {
 
     private let store: any ClaudeCredentialStoring
     private let transport: any HTTPTransporting
+    /// Reads Claude Code's current credential plus its account UUID for
+    /// `claudeCodeLive` accounts. Injected so checks can run without the
+    /// real Keychain.
+    private let liveCredentials: @Sendable () throws -> ClaudeCodeLiveCredential
     /// How long a successful fetch is served from cache before a *periodic*
     /// (non-forced) refresh hits the network again. By explicit design this is
     /// kept exactly equal to the user's configured Settings refresh interval —
@@ -98,10 +103,14 @@ public actor ClaudeOAuthUsageService {
         transport: any HTTPTransporting = URLSessionHTTPTransport(),
         cacheTTL: TimeInterval = ClaudeOAuthUsageService.defaultCacheTTL,
         minForceFetchInterval: TimeInterval = 10,
-        logURL: URL? = nil
+        logURL: URL? = nil,
+        liveCredentials: @escaping @Sendable () throws -> ClaudeCodeLiveCredential = {
+            try ClaudeCodeCredentialImporter().liveCredential()
+        }
     ) {
         self.store = store
         self.transport = transport
+        self.liveCredentials = liveCredentials
         self.cacheTTL = cacheTTL
         self.minForceFetchInterval = minForceFetchInterval
         self.logURL = logURL
@@ -136,7 +145,10 @@ public actor ClaudeOAuthUsageService {
         String(id.uuidString.prefix(8))
     }
 
-    public func fetch(profileID: UUID, force: Bool = false) async throws -> ClaudeUsageResult {
+    /// - Parameter live: set for `claudeCodeLive` accounts. Their credential is
+    ///   read from Claude Code on every network fetch and never refreshed or
+    ///   stored here, so AI Usage can't invalidate Claude Code's own token.
+    public func fetch(profileID: UUID, force: Bool = false, live: ClaudeCodeLiveExpectation? = nil) async throws -> ClaudeUsageResult {
         let now = Date()
         let mode = force ? "forced  " : "periodic"
         let tag = Self.shortID(profileID)
@@ -161,7 +173,24 @@ public actor ClaudeOAuthUsageService {
         }
 
         var credentials: ClaudeOAuthCredentials
-        if let cachedCredentials = credentialsCache[profileID] {
+        if let live {
+            let current: ClaudeCodeLiveCredential
+            do {
+                current = try liveCredentials()
+            } catch {
+                logEvent("usage \(tag) \(mode) -> live read ERROR: \(Self.diagnosticDescription(error))")
+                throw error
+            }
+            if let expected = live.accountIdentifier, let actual = current.accountIdentifier, expected != actual {
+                logEvent("usage \(tag) \(mode) -> live account changed")
+                throw ClaudeOAuthUsageError.accountChanged(current.accountLabel)
+            }
+            guard !current.credentials.needsRefresh(buffer: 0) else {
+                logEvent("usage \(tag) \(mode) -> live token expired")
+                throw ClaudeOAuthUsageError.claudeCodeLoginStale
+            }
+            credentials = current.credentials
+        } else if let cachedCredentials = credentialsCache[profileID] {
             credentials = cachedCredentials
             retryCredentialPersistenceIfNeeded(credentials, profileID: profileID, tag: tag)
         } else {
@@ -179,7 +208,7 @@ public actor ClaudeOAuthUsageService {
             credentials = storedCredentials
             credentialsCache[profileID] = storedCredentials
         }
-        if credentials.needsRefresh(), credentials.refreshToken != nil {
+        if live == nil, credentials.needsRefresh(), credentials.refreshToken != nil {
             logEvent("usage \(tag) \(mode) -> token refresh (near expiry)")
             do {
                 credentials = try await refresh(credentials, profileID: profileID)
@@ -192,6 +221,10 @@ public actor ClaudeOAuthUsageService {
         logEvent("usage \(tag) \(mode) -> NETWORK GET (since last real fetch: \(sinceLast.map { "\($0)s" } ?? "n/a"))")
         var response = try await usageResponse(accessToken: credentials.accessToken)
         if response.statusCode == 401 || response.statusCode == 403 {
+            if live != nil {
+                logEvent("usage \(tag) \(mode) -> \(response.statusCode), live token rejected")
+                throw ClaudeOAuthUsageError.claudeCodeLoginStale
+            }
             guard credentials.refreshToken != nil else {
                 logEvent("usage \(tag) \(mode) -> \(response.statusCode), no refresh token")
                 throw ClaudeOAuthUsageError.authenticationRequired
@@ -447,6 +480,7 @@ public struct ClaudeOAuthUsageProbe: ForceRefreshableUsageProbing {
     private let profile: ClaudeProfile?
     private let quota: QuotaSelection
     private let service: ClaudeOAuthUsageService
+    private let live: Bool
 
     public init(
         sourceID: String,
@@ -454,8 +488,10 @@ public struct ClaudeOAuthUsageProbe: ForceRefreshableUsageProbing {
         enabled: Bool,
         profile: ClaudeProfile?,
         quota: QuotaSelection,
-        service: ClaudeOAuthUsageService = .shared
+        service: ClaudeOAuthUsageService = .shared,
+        live: Bool = false
     ) {
+        self.live = live
         self.sourceID = sourceID
         self.label = label
         self.enabled = enabled
@@ -472,10 +508,14 @@ public struct ClaudeOAuthUsageProbe: ForceRefreshableUsageProbing {
         guard enabled else {
             return UsageSnapshot(sourceID: sourceID, label: label, enabled: false, percentUsed: nil, status: .disabled, updatedAt: Date(), errorMessage: nil)
         }
-        guard let profile else { return failure("Import a Claude Code account in Settings") }
+        guard let profile else { return failure("This account isn't set up yet", kind: .notConfigured) }
 
         do {
-            let result = try await service.fetch(profileID: profile.id, force: force)
+            let result = try await service.fetch(
+                profileID: profile.id,
+                force: force,
+                live: live ? ClaudeCodeLiveExpectation(accountIdentifier: profile.accountIdentifier) : nil
+            )
             let selected = quota == .weekly ? result.weekly : result.session
             guard let selected else { return failure("Claude did not report \(quota.displayName.lowercased()) usage") }
             return UsageSnapshot(
@@ -492,12 +532,59 @@ public struct ClaudeOAuthUsageProbe: ForceRefreshableUsageProbing {
                 extraWindows: result.extra
             )
         } catch {
-            return failure(error.localizedDescription)
+            var snapshot = failure(error.localizedDescription, kind: Self.failureKind(for: error))
+            if case .rateLimited(let date) = error as? ClaudeOAuthUsageError { snapshot.retryAt = date }
+            return snapshot
         }
     }
 
-    private func failure(_ message: String) -> UsageSnapshot {
-        UsageSnapshot(sourceID: sourceID, label: label, enabled: enabled, percentUsed: nil, status: .failed, updatedAt: Date(), errorMessage: message)
+    public static func failureKind(for error: Error) -> UsageFailure {
+        if let error = error as? ClaudeOAuthUsageError {
+            switch error {
+            case .authenticationRequired, .sessionExpired, .claudeCodeLoginStale: return .authentication
+            case .accountChanged: return .accountChanged
+            case .networkUnavailable: return .network
+            case .rateLimited: return .rateLimited
+            case .requestFailed(let status): return status >= 500 ? .network : .other
+            case .invalidResponse: return .other
+            }
+        }
+        if case ClaudeCredentialStoreError.operationFailed(let status) = error {
+            return status == errSecInteractionNotAllowed ? .keychainLocked : .other
+        }
+        if let error = error as? ClaudeCredentialImportError {
+            switch error {
+            case .notFound: return .authentication
+            case .keychainAccessFailed(let status): return status == errSecInteractionNotAllowed ? .keychainLocked : .other
+            case .invalidCredentials: return .other
+            }
+        }
+        return .other
+    }
+
+    private func failure(_ message: String, kind: UsageFailure? = nil) -> UsageSnapshot {
+        UsageSnapshot(sourceID: sourceID, label: label, enabled: enabled, percentUsed: nil, status: .failed, updatedAt: Date(), errorMessage: message, failure: kind)
+    }
+}
+
+/// What a `claudeCodeLive` account expects to find in Claude Code.
+public struct ClaudeCodeLiveExpectation: Sendable {
+    public let accountIdentifier: String?
+
+    public init(accountIdentifier: String?) {
+        self.accountIdentifier = accountIdentifier
+    }
+}
+
+public struct ClaudeCodeLiveCredential: Sendable {
+    public let credentials: ClaudeOAuthCredentials
+    public let accountIdentifier: String?
+    public let accountLabel: String?
+
+    public init(credentials: ClaudeOAuthCredentials, accountIdentifier: String?, accountLabel: String?) {
+        self.credentials = credentials
+        self.accountIdentifier = accountIdentifier
+        self.accountLabel = accountLabel
     }
 }
 
@@ -508,13 +595,19 @@ public enum ClaudeOAuthUsageError: LocalizedError, Equatable {
     case rateLimited(Date)
     case requestFailed(Int)
     case invalidResponse
+    case accountChanged(String?)
+    case claudeCodeLoginStale
 
     public var errorDescription: String? {
         switch self {
         case .authenticationRequired:
             "Claude account credentials are missing or no longer valid"
         case .sessionExpired:
-            "Claude session expired. Log in with Claude Code and import this profile again."
+            "Claude rejected the refresh token (invalid_grant). Reconnect this account."
+        case .accountChanged(let label):
+            "Claude Code is now signed in as \(label ?? "a different account"), not this account"
+        case .claudeCodeLoginStale:
+            "Claude Code's login has expired. Open Claude Code once so it refreshes, or reconnect with an own login."
         case .networkUnavailable:
             "Claude usage could not be reached"
         case .rateLimited(let date):

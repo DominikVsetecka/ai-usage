@@ -1,5 +1,6 @@
 import AIUsageCore
 import Foundation
+import Security
 
 final class MemoryClaudeCredentialStore: ClaudeCredentialStoring, @unchecked Sendable {
     private let lock = NSLock()
@@ -94,10 +95,8 @@ check(AppConfig(refreshIntervalSeconds: 10, sources: []).refreshIntervalSeconds 
 check(AppConfig(refreshIntervalSeconds: 120, sources: []).refreshIntervalSeconds == 120, "refresh interval above the floor is left untouched")
 check(config.showsRemainingCountdown == false, "remaining countdown should default off")
 check(config.resolvedVisualHistoryStyle == .bars, "history style should default to bars")
-check(config.sources.map(\.label) == ["C1", "C2", "GPT"], "default labels should be C1/C2/GPT")
-check(config.sources[0].mode == .claudeCLI, "Claude 1 should default to CLI mode")
-check(config.sources[1].enabled == false, "Claude 2 should default disabled until a second account path is configured")
-check(config.sources[2].mode == .codexRPC, "Codex should default to RPC mode")
+check(config.sources.isEmpty, "a fresh install starts without accounts; the Accounts wizard adds them")
+check(config.configVersion == AppConfig.currentConfigVersion, "a freshly built config is already on the current schema")
 
 let overriddenURL = AppConfig.defaultConfigURL(environment: [
     "AI_USAGE_CONFIG": "/tmp/ai-usage-test.json",
@@ -1223,5 +1222,131 @@ let reloaded = notifyStore.load()
 check(reloaded["claude1|extra|Fable"]?.lastPercent == 19, "notification state persists last-seen percent across a reload (restart)")
 check(reloaded["claude1|extra|Fable"]?.lastIncreaseAt == stamped, "notification state persists the quiet-period timestamp across a reload")
 check(reloaded["claude1|5-hour"]?.paceFired == true, "notification state persists the pace-fired flag across a reload")
+
+
+// MARK: - Accounts rework (ConnectionHealth, Codex ladder, migration, history, live mode)
+
+func failedSnapshot(_ message: String?, failure: UsageFailure? = nil) -> UsageSnapshot {
+    UsageSnapshot(sourceID: "x", label: "X", enabled: true, percentUsed: nil, status: .failed, updatedAt: nil, errorMessage: message, failure: failure)
+}
+check(ConnectionHealth.of(nil) == .waiting, "an account without a check yet is waiting")
+check(ConnectionHealth.of(failedSnapshot(nil, failure: .authentication)) == .needsLogin, "an auth failure needs a new login")
+check(ConnectionHealth.of(failedSnapshot(nil, failure: .network)) == .retrying, "network trouble heals itself")
+check(ConnectionHealth.of(failedSnapshot(nil, failure: .rateLimited)) == .retrying, "a rate limit heals itself")
+check(ConnectionHealth.of(failedSnapshot(nil, failure: .keychainLocked)) == .keychainLocked, "a locked Keychain waits for unlock")
+check(!ConnectionHealth.keychainLocked.needsUser && !ConnectionHealth.retrying.needsUser, "self-healing states never ask the user")
+check(ConnectionHealth.needsLogin.needsUser && ConnectionHealth.incompatible.needsUser, "login and CLI problems ask the user")
+// Real stderr of codex-cli 0.166.0 when started with the removed `-a untrusted`.
+let codexRejection = "error: invalid value 'untrusted' for '--ask-for-approval <APPROVAL_POLICY>'\n  [possible values: on-request, never]"
+check(CodexRPCClient.isArgumentRejection(codexRejection), "a removed Codex flag is recognised as an argument rejection")
+check(!CodexRPCClient.isArgumentRejection("codex account authentication required to read rate limits"), "a missing Codex login is not an argument rejection")
+check(ConnectionHealth.of(failedSnapshot(codexRejection)) == .incompatible, "text-only CLI rejections classify as incompatible")
+check(ConnectionHealth.of(failedSnapshot("Claude CLI: not logged in")) == .needsLogin, "text-only CLI login errors classify as login needed")
+check(CodexRPCClient.parseVersion("codex-cli 0.166.0\n") == "0.166.0", "Codex version is parsed from --version output")
+check(CodexRPCClient.argumentLadder.first == ["-s", "read-only", "app-server"], "the read-only start variant is tried first")
+let codexEnvironment = CodexRPCClient.processEnvironment(merging: ["CODEX_HOME": "~/.ai-usage/codex-accounts/codex-1"])
+check(codexEnvironment["CODEX_HOME"] == NSHomeDirectory() + "/.ai-usage/codex-accounts/codex-1", "a stored ~ Codex folder is expanded before Codex starts (Codex does not expand it)")
+check(!CodexRPCClient.argumentLadder.joined().contains("untrusted"), "no ladder entry uses the removed approval value")
+
+// Migration keeps IDs and tells guided logins apart from copied Claude Code tokens.
+let migrationHome = FileManager.default.temporaryDirectory.appendingPathComponent("ai-usage-migration-\(UUID().uuidString)", isDirectory: true)
+try FileManager.default.createDirectory(
+    at: ClaudeGuidedLoginService.configDirectory(homeDirectory: migrationHome, connectionID: "claude1"),
+    withIntermediateDirectories: true
+)
+defer { try? FileManager.default.removeItem(at: migrationHome) }
+var legacyAccounts = AppConfig(refreshIntervalSeconds: 90, configVersion: nil, sources: [
+    SourceConfig(id: "claude1", label: "C1", enabled: true, mode: .claudeOAuth, command: nil, claudeProfile: ClaudeProfile(name: "One")),
+    SourceConfig(id: "claude2", label: "C2", enabled: true, mode: .claudeOAuth, command: nil, claudeProfile: ClaudeProfile(name: "Two")),
+    SourceConfig(id: "codex", label: "GPT", enabled: true, mode: .codexRPC, command: CommandConfig(executable: "/opt/homebrew/bin/codex"))
+])
+let migrated = AccountMigration.migrate(legacyAccounts, homeDirectory: migrationHome)
+check(migrated.changed, "a v1 config is migrated once")
+check(migrated.config.sources.map(\.id) == ["claude1", "claude2", "codex"], "migration keeps account IDs so history keeps matching")
+check(migrated.config.sources[0].credentialOrigin == .guidedLogin, "an account with a guided-login folder owns its token")
+check(migrated.config.sources[1].credentialOrigin == .claudeCodeCopy, "an account without one copied Claude Code's token")
+check(migrated.config.sources[2].credentialOrigin == nil, "Codex accounts have no Claude credential origin")
+check(!AccountMigration.migrate(migrated.config, homeDirectory: migrationHome).changed, "a migrated config is left alone")
+legacyAccounts.configVersion = AppConfig.currentConfigVersion
+check(!AccountMigration.migrate(legacyAccounts, homeDirectory: migrationHome).changed, "a current config is never migrated")
+check(AccountMigration.newAccountID(provider: .codex).hasPrefix("codex-"), "new account IDs name their provider")
+check(CodexAccountService.isAppOwned("~/.ai-usage/codex-accounts/codex-1a2b3c4d"), "app-created Codex folders may be deleted on removal")
+check(!CodexAccountService.isAppOwned("~/.codex") && !CodexAccountService.isAppOwned(nil), "the user's own Codex folder is never deleted")
+check(CodexAccountService.loginURL(in: "If your browser did not open, navigate to this URL to authenticate:\nhttps://auth.openai.com/oauth/authorize?x=1\n")?.host == "auth.openai.com", "the Codex login fallback URL is picked from its output")
+
+// Connection history: append-only, newest first, pruned by age and on removal.
+let eventsURL = migrationHome.appendingPathComponent("events.jsonl")
+let eventStore = ConnectionEventStore(url: eventsURL, retentionDays: 90, perAccountLimit: 2)
+await eventStore.append(ConnectionEvent(ts: Date().addingTimeInterval(-100 * 86_400), account: "claude2", kind: .note, message: "old"))
+await eventStore.append(ConnectionEvent(account: "claude2", kind: .healthChanged, health: .needsLogin, message: "Login needed"))
+await eventStore.append(ConnectionEvent(account: "claude2", kind: .reconnected, health: .connected, message: "Own login"))
+await eventStore.append(ConnectionEvent(account: "codex", kind: .added, message: "Added"))
+let newestEvent = await eventStore.load(account: "claude2").first
+check(newestEvent?.message == "Own login", "history loads newest first")
+await eventStore.prune()
+let prunedEvents = await eventStore.load(account: "claude2")
+check(prunedEvents.map(\.message) == ["Own login", "Login needed"], "pruning drops events past the retention window")
+await eventStore.prune(removingAccounts: ["codex"])
+let removedEvents = await eventStore.load(account: "codex")
+check(removedEvents.isEmpty, "removing an account without keeping history forgets its events")
+let latestHealth = await eventStore.latestHealth()
+check(latestHealth["claude2"] == .connected, "the last logged state per account survives a restart, so it isn't logged again")
+let rawEvents = (try? String(contentsOf: eventsURL, encoding: .utf8)) ?? ""
+check(!rawEvents.contains("Token") && rawEvents.split(separator: "\n").count == 2, "the history file holds one JSON line per event")
+
+// Live mode reads Claude Code's token on every fetch and never refreshes or stores it.
+let liveStore = MemoryClaudeCredentialStore()
+let liveTransport = QueueHTTPTransport(responses: [
+    HTTPResult(data: oauthUsageFixture, statusCode: 200),
+    HTTPResult(data: Data("{}".utf8), statusCode: 401)
+])
+let liveService = ClaudeOAuthUsageService(
+    store: liveStore,
+    transport: liveTransport,
+    cacheTTL: 0,
+    minForceFetchInterval: 0,
+    liveCredentials: {
+        ClaudeCodeLiveCredential(
+            credentials: ClaudeOAuthCredentials(accessToken: "live-access", refreshToken: "live-refresh", expiresAtMilliseconds: (Date().timeIntervalSince1970 + 3_600) * 1_000),
+            accountIdentifier: "account-a",
+            accountLabel: "a@example.invalid"
+        )
+    }
+)
+let liveProfile = UUID()
+let liveUsage = try await liveService.fetch(profileID: liveProfile, live: ClaudeCodeLiveExpectation(accountIdentifier: "account-a"))
+check(liveUsage.session?.percentUsed == 22, "live mode reads usage with Claude Code's current token")
+do {
+    _ = try await liveService.fetch(profileID: liveProfile, force: true, live: ClaudeCodeLiveExpectation(accountIdentifier: "account-a"))
+    check(false, "a rejected live token must not be refreshed")
+} catch {
+    check(error as? ClaudeOAuthUsageError == .claudeCodeLoginStale, "a rejected live token asks to open Claude Code instead of refreshing")
+}
+let liveRequests = await liveTransport.requests
+check(liveRequests.count == 2 && liveStore.saveCount == 0, "live mode never calls the token endpoint or writes the Keychain")
+do {
+    _ = try await liveService.fetch(profileID: liveProfile, force: true, live: ClaudeCodeLiveExpectation(accountIdentifier: "account-b"))
+    check(false, "a different Claude Code account must not be read as this one")
+} catch {
+    check(ClaudeOAuthUsageProbe.failureKind(for: error) == .accountChanged, "a switched Claude Code account is reported as account changed")
+}
+check(ClaudeOAuthUsageProbe.failureKind(for: ClaudeCredentialStoreError.operationFailed(errSecInteractionNotAllowed)) == .keychainLocked, "a locked Keychain after wake is not a lost login")
+check(ClaudeOAuthUsageProbe.failureKind(for: ClaudeOAuthUsageError.sessionExpired) == .authentication, "invalid_grant needs a new login")
+check(ClaudeOAuthUsageProbe.failureKind(for: ClaudeOAuthUsageError.requestFailed(503)) == .network, "server errors are retried")
+
+
+// A rate-limited account carries when it is asked again, for the countdown.
+let limitedStore = MemoryClaudeCredentialStore()
+let limitedProfile = ClaudeProfile(name: "Limited")
+try limitedStore.save(ClaudeOAuthCredentials(accessToken: "limited-access", expiresAtMilliseconds: (Date().timeIntervalSince1970 + 3_600) * 1_000), profileID: limitedProfile.id)
+let limitedService = ClaudeOAuthUsageService(
+    store: limitedStore,
+    transport: QueueHTTPTransport(responses: [HTTPResult(data: Data("{}".utf8), statusCode: 429, headers: ["retry-after": "300"])]),
+    cacheTTL: 0,
+    minForceFetchInterval: 0
+)
+let limitedSnapshot = await ClaudeOAuthUsageProbe(sourceID: "limited", label: "L", enabled: true, profile: limitedProfile, quota: .session, service: limitedService).readUsage()
+check(limitedSnapshot.failure == .rateLimited && ConnectionHealth.of(limitedSnapshot) == .retrying, "a 429 is a self-healing rate limit")
+check((limitedSnapshot.retryAt?.timeIntervalSinceNow ?? 0) > 290, "a rate-limited snapshot carries the retry time the server asked for")
 
 print("AIUsageChecks passed")

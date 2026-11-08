@@ -5,6 +5,8 @@ import SwiftUI
 
 extension Notification.Name {
     static let aiUsageSnapshotsDidUpdate = Notification.Name("AIUsageSnapshotsDidUpdate")
+    /// Opens Settings › Accounts; `object` is the account ID to select, if any.
+    static let aiUsageOpenAccounts = Notification.Name("AIUsageOpenAccounts")
 }
 
 @MainActor
@@ -25,6 +27,10 @@ final class StatusBarController {
     private var popover: NSPopover?
     private var popoverViewModel: PopoverViewModel?
     let historyStore: UsageHistoryStore
+    let eventStore = ConnectionEventStore(url: ConnectionEventStore.defaultURL())
+    /// Last health per account, so only real state changes reach the history.
+    private var lastHealth: [String: ConnectionHealth] = [:]
+    private var openAccountsObserver: NSObjectProtocol?
     private let notifyStateStore = NotificationStateStore(url: StatusBarController.notifyStateURL())
     /// Persistent per-window notification bookkeeping (baselines, quiet-period
     /// timers, pace/login flags), keyed `"sourceID|windowName"`. Loaded on
@@ -51,8 +57,13 @@ final class StatusBarController {
         configureStatusItem()
         render()
         scheduleRefresh()
+        openAccountsObserver = NotificationCenter.default.addObserver(forName: .aiUsageOpenAccounts, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.popover?.performClose(nil) }
+        }
 
         Task {
+            await eventStore.prune()
+            lastHealth = await eventStore.latestHealth()
             await oauthUsageService.updateCacheTTL(config.refreshIntervalSeconds)
             await refreshNow(force: true, trigger: "startup")
         }
@@ -74,6 +85,28 @@ final class StatusBarController {
         let home = ProcessInfo.processInfo.environment["HOME"] ?? "~"
         return URL(fileURLWithPath: home)
             .appendingPathComponent(".ai-usage/fetch-log.txt")
+    }
+
+    /// Screenshot hook: renders the popover content to a PNG without needing
+    /// a visible menu bar item (which can hide behind the notch).
+    func renderPopoverSnapshot(to url: URL) async {
+        guard let viewModel = popoverViewModel else { return }
+        viewModel.snapshots = monitor.snapshots
+        await viewModel.loadHistory()
+        let width = UsagePopoverView.preferredContentSize(for: monitor.snapshots, config: config).width
+        let host = NSHostingView(rootView: UsagePopoverView(viewModel: viewModel)
+            .frame(width: width)
+            .fixedSize(horizontal: false, vertical: true)
+            .environment(\.colorScheme, .dark))
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.frame = NSRect(x: 0, y: 0, width: width, height: 2_000)
+        host.layoutSubtreeIfNeeded()
+        host.frame.size = NSSize(width: width, height: host.fittingSize.height)
+        host.layoutSubtreeIfNeeded()
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        try? bitmap.representation(using: .png, properties: [:])?.write(to: url)
     }
 
     func stop() {
@@ -173,11 +206,14 @@ final class StatusBarController {
 
     private func scheduleRefresh() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: monitor.refreshIntervalSeconds, repeats: true) { [weak self] _ in
+        let interval = monitor.refreshIntervalSeconds
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in
+                RefreshClock.shared.scheduled(interval: interval)
                 await self?.refreshNow(trigger: "timer")
             }
         }
+        RefreshClock.shared.scheduled(interval: interval)
         timer?.tolerance = min(5, monitor.refreshIntervalSeconds * 0.1)
     }
 
@@ -188,12 +224,33 @@ final class StatusBarController {
             self?.render()
         }
         await historyStore.record(monitor.snapshots)
+        await recordHealthChanges(monitor.snapshots)
         await checkNotifications(current: monitor.snapshots)
         if popover?.isShown == true {
             await popoverViewModel?.loadHistory()
         }
         popoverViewModel?.isRefreshing = false
         render()
+    }
+
+    /// Writes a history event whenever an account's connection state changes.
+    /// A healthy account at launch isn't news; anything else is.
+    private func recordHealthChanges(_ snapshots: [UsageSnapshot]) async {
+        for snapshot in snapshots where snapshot.enabled {
+            let health = ConnectionHealth.of(snapshot)
+            guard health != .waiting else { continue }
+            let previous = lastHealth[snapshot.sourceID]
+            lastHealth[snapshot.sourceID] = health
+            // Unknown before (first run, or never logged): a healthy account isn't news.
+            guard previous != health, previous != nil || health != .connected else { continue }
+            var message = health.title
+            if health != .connected, let error = snapshot.errorMessage, !error.isEmpty {
+                message += ": " + String(error.prefix(200))
+            } else if health == .connected, previous != nil {
+                message = "Connected again"
+            }
+            await eventStore.append(ConnectionEvent(account: snapshot.sourceID, kind: .healthChanged, health: health, message: message))
+        }
     }
 
     /// Evaluates all enabled notification types against the latest snapshots and
@@ -216,13 +273,14 @@ final class StatusBarController {
             let sourceConfig = config.sources.first { $0.id == snapshot.sourceID }
             let remaining = sourceConfig?.resolvedRemainingCountdown(globalDefault: globalRemaining) ?? globalRemaining
 
-            // Login expired (per source).
+            // Account needs the user (login expired, CLI changed, …), once per change.
             if settings.resolvedLoginExpired {
                 let key = "\(snapshot.sourceID)|__login"
                 var state = notifyState[key] ?? NotificationWindowState()
-                if snapshot.status == .failed, Self.isAuthError(snapshot.errorMessage) {
+                let health = ConnectionHealth.of(snapshot)
+                if health.needsUser {
                     if state.loginFailedNotified != true {
-                        UsageNotifier.notifyLoginExpired(sourceLabel: snapshot.label)
+                        UsageNotifier.notifyNeedsAttention(sourceLabel: snapshot.label, accountID: snapshot.sourceID, health: health)
                         state.loginFailedNotified = true
                     }
                 } else if snapshot.status == .ok {
@@ -316,20 +374,6 @@ final class StatusBarController {
             return (entry.ts, pct)
         }
         return HistoryTrimmer.trimToCurrentCycle(raw)
-    }
-
-    private static func isAuthError(_ message: String?) -> Bool {
-        guard let message = message?.lowercased() else { return false }
-        // Match genuine "your login stopped working" cases across OAuth and CLI.
-        // Deliberately excludes the never-configured case ("Import a Claude Code
-        // account in Settings"), which is a setup prompt, not an expired login.
-        return message.contains("session expired")
-            || message.contains("no longer valid")
-            || message.contains("credentials are missing")
-            || message.contains("import this profile")   // OAuth session-expired guidance
-            || message.contains("logged in")             // CLI "(not) logged in"
-            || message.contains("please log in")
-            || message.contains("login required")
     }
 
     private func render() {
